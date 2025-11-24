@@ -1,12 +1,12 @@
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
-use log::{info, warn};
 
+use anyhow::Result;
 #[cfg(target_os = "macos")]
 use log::error;
-use anyhow::Result;
 
 #[cfg(target_os = "macos")]
 use crate::audio::capture::AudioCaptureBackend;
@@ -92,7 +92,6 @@ pub fn generate_recording_filename(format: &str) -> String {
     format!("recording_{}.{}", timestamp, format)
 }
 
-
 /// Load recording preferences from store
 pub async fn load_recording_preferences<R: Runtime>(
     app: &AppHandle<R>,
@@ -109,7 +108,7 @@ pub async fn load_recording_preferences<R: Runtime>(
     // Try to get the preferences from store
     let prefs = if let Some(value) = store.get("preferences") {
         match serde_json::from_value::<RecordingPreferences>(value.clone()) {
-            Ok(mut p) => {
+            Ok(p) => {
                 info!("Loaded recording preferences from store");
                 // Update macOS backend to current value if needed
                 #[cfg(target_os = "macos")]
@@ -145,7 +144,8 @@ pub async fn save_recording_preferences<R: Runtime>(
           preferences.preferred_mic_device, preferences.preferred_system_device);
 
     // Get or create store
-    let store = app.store("recording_preferences.json")
+    let store = app
+        .store("recording_preferences.json")
         .map_err(|e| anyhow::anyhow!("Failed to access store: {}", e))?;
 
     // Serialize preferences to JSON value
@@ -156,7 +156,8 @@ pub async fn save_recording_preferences<R: Runtime>(
     store.set("preferences", prefs_value);
 
     // Persist to disk
-    store.save()
+    store
+        .save()
         .map_err(|e| anyhow::anyhow!("Failed to save store to disk: {}", e))?;
 
     info!("Successfully persisted recording preferences to disk");
@@ -203,9 +204,7 @@ pub async fn get_default_recordings_folder_path() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn open_recordings_folder<R: Runtime>(
-    app: AppHandle<R>,
-) -> Result<(), String> {
+pub async fn open_recordings_folder<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let preferences = load_recording_preferences(&app)
         .await
         .map_err(|e| format!("Failed to load preferences: {}", e))?;
@@ -294,7 +293,9 @@ pub async fn set_audio_backend(backend: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         use crate::audio::capture::AudioCaptureBackend;
-        use crate::audio::permissions::{check_screen_recording_permission, request_screen_recording_permission};
+        use crate::audio::permissions::{
+            check_screen_recording_permission, request_screen_recording_permission,
+        };
 
         let backend_enum = AudioCaptureBackend::from_string(&backend)
             .ok_or_else(|| format!("Invalid backend: {}", backend))?;
@@ -321,7 +322,9 @@ pub async fn set_audio_backend(backend: String) -> Result<(), String> {
                 );
             }
 
-            info!("✅ Core Audio backend selected - permission check will occur at recording start");
+            info!(
+                "✅ Core Audio backend selected - permission check will occur at recording start"
+            );
         }
 
         info!("Setting audio backend to: {:?}", backend_enum);
@@ -332,7 +335,10 @@ pub async fn set_audio_backend(backend: String) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     {
         if backend != "screencapturekit" {
-            return Err(format!("Backend {} not available on this platform", backend));
+            return Err(format!(
+                "Backend {} not available on this platform",
+                backend
+            ));
         }
         Ok(())
     }
@@ -356,7 +362,9 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
             BackendInfo {
                 id: AudioCaptureBackend::ScreenCaptureKit.to_string(),
                 name: AudioCaptureBackend::ScreenCaptureKit.name().to_string(),
-                description: AudioCaptureBackend::ScreenCaptureKit.description().to_string(),
+                description: AudioCaptureBackend::ScreenCaptureKit
+                    .description()
+                    .to_string(),
             },
             BackendInfo {
                 id: AudioCaptureBackend::CoreAudio.to_string(),
@@ -376,3 +384,4 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
         }])
     }
 }
+

@@ -1,7 +1,7 @@
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, Manager, Runtime,
+    AppHandle, Manager, Runtime,
 };
 
 #[derive(Debug, Clone)]

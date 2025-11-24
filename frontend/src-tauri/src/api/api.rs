@@ -890,7 +890,7 @@ pub async fn api_save_transcript<R: Runtime>(
 /// Opens the meeting's recording folder in the system file explorer
 #[tauri::command]
 pub async fn open_meeting_folder<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     meeting_id: String,
 ) -> Result<(), String> {

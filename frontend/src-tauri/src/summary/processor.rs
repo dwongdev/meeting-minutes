@@ -2,6 +2,7 @@ use crate::summary::llm_client::{generate_summary, LLMProvider};
 use crate::summary::templates;
 use regex::Regex;
 use reqwest::Client;
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -144,6 +145,7 @@ pub async fn generate_meeting_summary(
     template_id: &str,
     token_threshold: usize,
     ollama_endpoint: Option<&str>,
+    app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<(String, i64), String> {
     // Check cancellation at the start
@@ -165,7 +167,7 @@ pub async fn generate_meeting_summary(
 
     // Strategy: Use single-pass for cloud providers or short transcripts
     // Use multi-level chunking for Ollama with long transcripts
-    if provider != &LLMProvider::Ollama || total_tokens < token_threshold {
+    if (provider != &LLMProvider::Ollama && provider != &LLMProvider::BuiltInAI) || total_tokens < token_threshold {
         info!(
             "Using single-pass summarization (tokens: {}, threshold: {})",
             total_tokens, token_threshold
@@ -207,6 +209,7 @@ pub async fn generate_meeting_summary(
                 system_prompt_chunk,
                 &user_prompt_chunk,
                 ollama_endpoint,
+                app_data_dir,
                 cancellation_token,
             )
             .await
@@ -257,6 +260,7 @@ pub async fn generate_meeting_summary(
                 system_prompt_combine,
                 &user_prompt_combine,
                 ollama_endpoint,
+                app_data_dir,
                 cancellation_token,
             )
             .await?
@@ -327,6 +331,7 @@ pub async fn generate_meeting_summary(
         &final_system_prompt,
         &final_user_prompt,
         ollama_endpoint,
+        app_data_dir,
         cancellation_token,
     )
     .await?;

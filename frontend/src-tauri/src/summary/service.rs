@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use once_cell::sync::Lazy;
@@ -100,21 +100,23 @@ impl SummaryService {
             }
         };
 
-        // Validate and setup api_key, Flexible for Ollama
-        let api_key = match SettingsRepository::get_api_key(&pool, &model_provider).await {
-            Ok(Some(key)) if !key.is_empty() => key,
-            Ok(None) | Ok(Some(_)) => {
-                if provider != LLMProvider::Ollama {
-                    let err_msg = format!("Api key not found for {}", &model_provider);
+        // Validate and setup api_key, Flexible for Ollama and BuiltInAI
+        let api_key = if provider == LLMProvider::Ollama || provider == LLMProvider::BuiltInAI {
+            // These providers don't require API keys from database
+            String::new()
+        } else {
+            match SettingsRepository::get_api_key(&pool, &model_provider).await {
+                Ok(Some(key)) if !key.is_empty() => key,
+                Ok(None) | Ok(Some(_)) => {
+                    let err_msg = format!("API key not found for {}", &model_provider);
                     Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
                     return;
                 }
-                String::new()
-            }
-            Err(e) => {
-                let err_msg = format!("Failed to retrieve api key for {} : {}", &model_provider, e);
-                Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
-                return;
+                Err(e) => {
+                    let err_msg = format!("Failed to retrieve API key for {}: {}", &model_provider, e);
+                    Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
+                    return;
+                }
             }
         };
 
@@ -132,7 +134,7 @@ impl SummaryService {
             None
         };
 
-        // Dynamically fetch context size for Ollama models
+        // Dynamically fetch context size based on provider and model
         let token_threshold = if provider == LLMProvider::Ollama {
             match METADATA_CACHE.get_or_fetch(&model_name, ollama_endpoint.as_deref()).await {
                 Ok(metadata) => {
@@ -152,10 +154,34 @@ impl SummaryService {
                     4000  // Fallback to safe default
                 }
             }
+        } else if provider == LLMProvider::BuiltInAI {
+            // Get model's context size from registry
+            use crate::summary::summary_engine::models;
+            let model = models::get_model_by_name(&model_name)
+                .ok_or_else(|| format!("Unknown model: {}", model_name));
+
+            match model {
+                Ok(model_def) => {
+                    // Reserve 300 tokens for prompt overhead
+                    let optimal = model_def.context_size.saturating_sub(300) as usize;
+                    info!(
+                        "✓ Using BuiltInAI context size: {} tokens (chunk size: {})",
+                        model_def.context_size, optimal
+                    );
+                    optimal
+                }
+                Err(e) => {
+                    warn!("{}, using default 2048", e);
+                    1748  // 2048 - 300 for overhead
+                }
+            }
         } else {
             // Cloud providers (OpenAI, Claude, Groq) handle large contexts automatically
             100000  // Effectively unlimited for single-pass processing
         };
+
+        // Get app data directory for BuiltInAI provider
+        let app_data_dir = _app.path().app_data_dir().ok();
 
         // Generate summary
         let client = reqwest::Client::new();
@@ -169,6 +195,7 @@ impl SummaryService {
             &template_id,
             token_threshold,
             ollama_endpoint.as_deref(),
+            app_data_dir.as_ref(),
             Some(&cancellation_token),
         )
         .await;

@@ -3,6 +3,7 @@ import { useSidebar } from './Sidebar/SidebarProvider';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { useOllamaDownload } from '@/contexts/OllamaDownloadContext';
+import { BuiltInModelManager } from '@/components/BuiltInModelManager';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -20,7 +21,7 @@ import { cn, isOllamaNotInstalledError } from '@/lib/utils';
 import { toast } from 'sonner';
 
 export interface ModelConfig {
-  provider: 'ollama' | 'groq' | 'claude' | 'openai' | 'openrouter';
+  provider: 'ollama' | 'groq' | 'claude' | 'openai' | 'openrouter' | 'builtin-ai';
   model: string;
   whisperModel: string;
   apiKey?: string | null;
@@ -79,6 +80,9 @@ export function ModelSettingsModal({
 
   // Use global download context instead of local state
   const { isDownloading, getProgress, downloadingModels } = useOllamaDownload();
+
+  // Built-in AI models state
+  const [builtinAiModels, setBuiltinAiModels] = useState<any[]>([]);
 
   // Cache models by endpoint to avoid refetching when reverting endpoint changes
   const modelsCache = useRef<Map<string, OllamaModel[]>>(new Map());
@@ -168,6 +172,7 @@ export function ModelSettingsModal({
       'gpt-3.5-turbo-1106'
     ],
     openrouter: openRouterModels.map((m) => m.id),
+    'builtin-ai': builtinAiModels.map((m) => m.name),
   };
 
   const requiresApiKey =
@@ -378,6 +383,26 @@ export function ModelSettingsModal({
     }
   };
 
+  const loadBuiltinAiModels = async () => {
+    if (builtinAiModels.length > 0) return; // Already loaded
+
+    try {
+      const data = (await invoke('builtin_ai_list_models')) as any[];
+      setBuiltinAiModels(data);
+
+      // Auto-select first available model if none selected
+      if (data.length > 0 && !modelConfig.model) {
+        const firstAvailable = data.find((m: any) => m.status?.type === 'available');
+        if (firstAvailable) {
+          setModelConfig((prev: ModelConfig) => ({ ...prev, model: firstAvailable.name }));
+        }
+      }
+    } catch (err) {
+      console.error('Error loading Built-in AI models:', err);
+      toast.error('Failed to load Built-in AI models');
+    }
+  };
+
   const handleSave = async () => {
     const updatedConfig = {
       ...modelConfig,
@@ -546,12 +571,18 @@ export function ModelSettingsModal({
                 if (provider === 'openrouter') {
                   loadOpenRouterModels();
                 }
+
+                // Load Built-in AI models when selected
+                if (provider === 'builtin-ai') {
+                  loadBuiltinAiModels();
+                }
               }}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select provider" />
               </SelectTrigger>
               <SelectContent className="max-h-64 overflow-y-auto">
+                <SelectItem value="builtin-ai">Built-in AI (Offline, No API needed)</SelectItem>
                 <SelectItem value="claude">Claude</SelectItem>
                 <SelectItem value="groq">Groq</SelectItem>
                 <SelectItem value="ollama">Ollama</SelectItem>
@@ -871,6 +902,18 @@ export function ModelSettingsModal({
                 )}
               </ScrollArea>
             )}
+          </div>
+        )}
+
+        {/* Built-in AI Models Section */}
+        {modelConfig.provider === 'builtin-ai' && (
+          <div className="mt-6">
+            <BuiltInModelManager
+              selectedModel={modelConfig.model}
+              onModelSelect={(model) =>
+                setModelConfig((prev: ModelConfig) => ({ ...prev, model }))
+              }
+            />
           </div>
         )}
       </div>

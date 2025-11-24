@@ -1,5 +1,6 @@
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -64,6 +65,7 @@ pub enum LLMProvider {
     Groq,
     Ollama,
     OpenRouter,
+    BuiltInAI,
 }
 
 impl LLMProvider {
@@ -75,6 +77,7 @@ impl LLMProvider {
             "groq" => Ok(Self::Groq),
             "ollama" => Ok(Self::Ollama),
             "openrouter" => Ok(Self::OpenRouter),
+            "builtin-ai" | "local-llama" | "localllama" => Ok(Self::BuiltInAI),
             _ => Err(format!("Unsupported LLM provider: {}", s)),
         }
     }
@@ -102,6 +105,7 @@ pub async fn generate_summary(
     system_prompt: &str,
     user_prompt: &str,
     ollama_endpoint: Option<&str>,
+    app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<String, String> {
     // Check if cancelled before starting
@@ -110,6 +114,23 @@ pub async fn generate_summary(
             return Err("Summary generation was cancelled".to_string());
         }
     }
+
+    // Handle BuiltInAI provider separately (uses local sidecar, no HTTP API)
+    if provider == &LLMProvider::BuiltInAI {
+        let app_data_dir = app_data_dir
+            .ok_or_else(|| "app_data_dir is required for BuiltInAI provider".to_string())?;
+
+        return crate::summary::summary_engine::generate_with_builtin(
+            app_data_dir,
+            model_name,
+            system_prompt,
+            user_prompt,
+            cancellation_token,
+        )
+        .await
+        .map_err(|e| e.to_string());
+    }
+
     let (api_url, mut headers) = match provider {
         LLMProvider::OpenAI => (
             "https://api.openai.com/v1/chat/completions".to_string(),
@@ -147,6 +168,10 @@ pub async fn generate_summary(
                     .map_err(|_| "Invalid anthropic version".to_string())?,
             );
             ("https://api.anthropic.com/v1/messages".to_string(), header_map)
+        }
+        LLMProvider::BuiltInAI => {
+            // This case is handled earlier (lines 119-132) with early return
+            unreachable!("BuiltInAI is handled before this match statement")
         }
     };
 
@@ -279,6 +304,7 @@ fn provider_name(provider: &LLMProvider) -> &str {
         LLMProvider::Claude => "Claude",
         LLMProvider::Groq => "Groq",
         LLMProvider::Ollama => "Ollama",
+        LLMProvider::BuiltInAI => "Built-in AI",
         LLMProvider::OpenRouter => "OpenRouter",
     }
 }
