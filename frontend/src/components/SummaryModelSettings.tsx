@@ -38,6 +38,25 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
             console.error('Failed to fetch API key:', err);
           }
         }
+        // Fetch Custom OpenAI config if that's the active provider
+        if (data.provider === 'custom-openai') {
+          try {
+            const customConfig = (await invoke('api_get_custom_openai_config')) as any;
+            if (customConfig) {
+              data.customOpenAIDisplayName = customConfig.displayName || null;
+              data.customOpenAIEndpoint = customConfig.endpoint || null;
+              data.customOpenAIModel = customConfig.model || null;
+              data.customOpenAIApiKey = customConfig.apiKey || null;
+              data.maxTokens = customConfig.maxTokens || null;
+              data.temperature = customConfig.temperature || null;
+              data.topP = customConfig.topP || null;
+              // For custom-openai, model field should match customOpenAIModel
+              data.model = customConfig.model || data.model;
+            }
+          } catch (err) {
+            console.error('Failed to fetch custom OpenAI config:', err);
+          }
+        }
         setModelConfig(data);
       }
     } catch (error) {

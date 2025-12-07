@@ -13,6 +13,7 @@ use crate::{
         },
     },
     state::AppState,
+    summary::CustomOpenAIConfig,
 };
 
 // Hardcoded server URL
@@ -526,8 +527,9 @@ pub async fn api_save_model_config<R: Runtime>(
         return Err(e.to_string());
     }
 
+    // Skip API key saving for custom-openai provider (it uses customOpenAIConfig JSON instead)
     if let Some(key) = api_key {
-        if !key.is_empty() {
+        if !key.is_empty() && provider != "custom-openai" {
             log_info!("🔑 API key provided, saving...");
             if let Err(e) = SettingsRepository::save_api_key(pool, &provider, &key).await {
                 log_error!("❌ Failed to save API key: {}", e);
@@ -1052,5 +1054,195 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
     match result {
         Ok(_) => Ok(()),
         Err(e) => Err(format!("Failed to open URL: {}", e)),
+    }
+}
+
+// ===== CUSTOM OPENAI API COMMANDS =====
+
+/// Saves the custom OpenAI configuration
+/// This configuration is stored as JSON and includes endpoint, apiKey, model, and optional parameters
+#[tauri::command]
+pub async fn api_save_custom_openai_config<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    display_name: String,
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+    max_tokens: Option<i32>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+) -> Result<serde_json::Value, String> {
+    log_info!(
+        "api_save_custom_openai_config called: displayName='{}', endpoint='{}', model='{}'",
+        &display_name,
+        &endpoint,
+        &model
+    );
+
+    // Validate required fields
+    if display_name.trim().is_empty() {
+        return Err("Display name is required".to_string());
+    }
+    if endpoint.trim().is_empty() {
+        return Err("Endpoint URL is required".to_string());
+    }
+    if model.trim().is_empty() {
+        return Err("Model name is required".to_string());
+    }
+
+    // Validate endpoint URL format
+    if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+        return Err("Endpoint must start with http:// or https://".to_string());
+    }
+
+    // Validate optional numeric parameters
+    if let Some(temp) = temperature {
+        if !(0.0..=2.0).contains(&temp) {
+            return Err("Temperature must be between 0.0 and 2.0".to_string());
+        }
+    }
+    if let Some(top) = top_p {
+        if !(0.0..=1.0).contains(&top) {
+            return Err("Top P must be between 0.0 and 1.0".to_string());
+        }
+    }
+    if let Some(tokens) = max_tokens {
+        if tokens < 1 {
+            return Err("Max tokens must be at least 1".to_string());
+        }
+    }
+
+    let config = CustomOpenAIConfig {
+        display_name: display_name.trim().to_string(),
+        endpoint: endpoint.trim().to_string(),
+        api_key: api_key.filter(|k| !k.trim().is_empty()),
+        model: model.trim().to_string(),
+        max_tokens,
+        temperature,
+        top_p,
+    };
+
+    let pool = state.db_manager.pool();
+
+    match SettingsRepository::save_custom_openai_config(pool, &config).await {
+        Ok(()) => {
+            log_info!("✅ Successfully saved custom OpenAI config for '{}'", config.display_name);
+            Ok(serde_json::json!({
+                "status": "success",
+                "message": "Custom OpenAI configuration saved successfully"
+            }))
+        }
+        Err(e) => {
+            log_error!("❌ Failed to save custom OpenAI config: {}", e);
+            Err(format!("Failed to save custom OpenAI configuration: {}", e))
+        }
+    }
+}
+
+/// Gets the custom OpenAI configuration
+#[tauri::command]
+pub async fn api_get_custom_openai_config<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<CustomOpenAIConfig>, String> {
+    log_info!("api_get_custom_openai_config called");
+
+    let pool = state.db_manager.pool();
+
+    match SettingsRepository::get_custom_openai_config(pool).await {
+        Ok(config) => {
+            if let Some(ref c) = config {
+                log_info!("✅ Found custom OpenAI config: displayName='{}', endpoint='{}', model='{}'",
+                    c.display_name, c.endpoint, c.model);
+            } else {
+                log_info!("No custom OpenAI config found");
+            }
+            Ok(config)
+        }
+        Err(e) => {
+            log_error!("❌ Failed to get custom OpenAI config: {}", e);
+            Err(format!("Failed to get custom OpenAI configuration: {}", e))
+        }
+    }
+}
+
+/// Tests the connection to a custom OpenAI-compatible endpoint
+/// Makes a minimal request to verify the endpoint is reachable and responds correctly
+#[tauri::command]
+pub async fn api_test_custom_openai_connection<R: Runtime>(
+    _app: AppHandle<R>,
+    endpoint: String,
+    api_key: Option<String>,
+    model: String,
+) -> Result<serde_json::Value, String> {
+    log_info!(
+        "api_test_custom_openai_connection called: endpoint='{}', model='{}'",
+        &endpoint,
+        &model
+    );
+
+    // Validate endpoint URL format
+    if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+        return Err("Endpoint must start with http:// or https://".to_string());
+    }
+
+    // Build the URL - append /chat/completions to the base endpoint
+    let url = format!("{}/chat/completions", endpoint.trim_end_matches('/'));
+
+    // Create a minimal test request
+    let test_request = serde_json::json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hi"
+            }
+        ],
+        "max_tokens": 5
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let mut request = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&test_request);
+
+    // Add authorization if API key provided
+    if let Some(key) = api_key.filter(|k| !k.trim().is_empty()) {
+        request = request.header("Authorization", format!("Bearer {}", key));
+    }
+
+    match request.send().await {
+        Ok(response) => {
+            let status = response.status();
+            let response_text = response.text().await.unwrap_or_default();
+
+            if status.is_success() {
+                log_info!("✅ Custom OpenAI connection test successful (status: {})", status);
+                Ok(serde_json::json!({
+                    "status": "success",
+                    "message": "Connection successful",
+                    "http_status": status.as_u16()
+                }))
+            } else {
+                log_warn!("⚠️ Custom OpenAI connection test failed with status {}: {}", status, response_text);
+                Err(format!("Connection failed with status {}: {}", status, response_text))
+            }
+        }
+        Err(e) => {
+            log_error!("❌ Custom OpenAI connection test failed: {}", e);
+            if e.is_timeout() {
+                Err("Connection timed out. Please check the endpoint URL.".to_string())
+            } else if e.is_connect() {
+                Err("Could not connect to endpoint. Please verify the URL is correct and the server is running.".to_string())
+            } else {
+                Err(format!("Connection failed: {}", e))
+            }
+        }
     }
 }

@@ -19,6 +19,12 @@ pub struct ChatMessage {
 pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
 }
 
 // Generic structure for OpenAI-compatible API chat responses
@@ -66,6 +72,7 @@ pub enum LLMProvider {
     Ollama,
     OpenRouter,
     BuiltInAI,
+    CustomOpenAI,
 }
 
 impl LLMProvider {
@@ -78,6 +85,7 @@ impl LLMProvider {
             "ollama" => Ok(Self::Ollama),
             "openrouter" => Ok(Self::OpenRouter),
             "builtin-ai" | "local-llama" | "localllama" => Ok(Self::BuiltInAI),
+            "custom-openai" => Ok(Self::CustomOpenAI),
             _ => Err(format!("Unsupported LLM provider: {}", s)),
         }
     }
@@ -93,6 +101,11 @@ impl LLMProvider {
 /// * `system_prompt` - System instructions for the LLM
 /// * `user_prompt` - User query/content to process
 /// * `ollama_endpoint` - Optional custom Ollama endpoint (defaults to localhost:11434)
+/// * `custom_openai_endpoint` - Optional custom OpenAI-compatible endpoint
+/// * `max_tokens` - Optional max tokens (for CustomOpenAI provider)
+/// * `temperature` - Optional temperature (for CustomOpenAI provider)
+/// * `top_p` - Optional top_p (for CustomOpenAI provider)
+/// * `app_data_dir` - Optional app data directory (for BuiltInAI provider)
 /// * `cancellation_token` - Optional token to cancel the request
 ///
 /// # Returns
@@ -105,6 +118,10 @@ pub async fn generate_summary(
     system_prompt: &str,
     user_prompt: &str,
     ollama_endpoint: Option<&str>,
+    custom_openai_endpoint: Option<&str>,
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<String, String> {
@@ -153,6 +170,14 @@ pub async fn generate_summary(
                 header::HeaderMap::new(),
             )
         }
+        LLMProvider::CustomOpenAI => {
+            let endpoint = custom_openai_endpoint
+                .ok_or_else(|| "Custom OpenAI endpoint not configured".to_string())?;
+            (
+                format!("{}/chat/completions", endpoint.trim_end_matches('/')),
+                header::HeaderMap::new(),
+            )
+        }
         LLMProvider::Claude => {
             let mut header_map = header::HeaderMap::new();
             header_map.insert(
@@ -193,6 +218,13 @@ pub async fn generate_summary(
 
     // Build request body based on provider
     let request_body = if provider != &LLMProvider::Claude {
+        // For CustomOpenAI, apply optional parameters if provided
+        let (max_tokens_val, temperature_val, top_p_val) = if provider == &LLMProvider::CustomOpenAI {
+            (max_tokens, temperature, top_p)
+        } else {
+            (None, None, None)
+        };
+
         serde_json::json!(ChatRequest {
             model: model_name.to_string(),
             messages: vec![
@@ -205,6 +237,9 @@ pub async fn generate_summary(
                     content: user_prompt.to_string(),
                 }
             ],
+            max_tokens: max_tokens_val,
+            temperature: temperature_val,
+            top_p: top_p_val,
         })
     } else {
         serde_json::json!(ClaudeRequest {
@@ -306,5 +341,6 @@ fn provider_name(provider: &LLMProvider) -> &str {
         LLMProvider::Ollama => "Ollama",
         LLMProvider::BuiltInAI => "Built-in AI",
         LLMProvider::OpenRouter => "OpenRouter",
+        LLMProvider::CustomOpenAI => "Custom OpenAI",
     }
 }

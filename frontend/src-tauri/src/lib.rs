@@ -620,6 +620,10 @@ pub fn run() {
             api::test_backend_connection,
             api::debug_backend_connection,
             api::open_external_url,
+            // Custom OpenAI commands
+            api::api_save_custom_openai_config,
+            api::api_get_custom_openai_config,
+            api::api_test_custom_openai_connection,
             // Summary commands
             summary::api_process_transcript,
             summary::api_get_summary,

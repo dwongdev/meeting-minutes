@@ -9,9 +9,27 @@ import { invoke } from '@tauri-apps/api/core';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
 
 export interface ModelConfig {
-  provider: 'ollama' | 'groq' | 'claude' | 'openrouter' | 'openai' | 'builtin-ai';
+  provider: 'ollama' | 'groq' | 'claude' | 'openrouter' | 'openai' | 'builtin-ai' | 'custom-openai';
   model: string;
   whisperModel: string;
+  // Custom OpenAI fields (only populated when provider is 'custom-openai')
+  customOpenAIDisplayName?: string | null;
+  customOpenAIEndpoint?: string | null;
+  customOpenAIModel?: string | null;
+  customOpenAIApiKey?: string | null;
+  maxTokens?: number | null;
+  temperature?: number | null;
+  topP?: number | null;
+}
+
+export interface CustomOpenAIConfig {
+  displayName: string;
+  endpoint: string;
+  apiKey: string | null;
+  model: string;
+  maxTokens: number | null;
+  temperature: number | null;
+  topP: number | null;
 }
 
 export interface RecordingPreferences {
@@ -58,6 +76,50 @@ export class ConfigService {
    */
   async getLanguagePreference(): Promise<string> {
     return invoke<string>('get_language_preference');
+  }
+
+  /**
+   * Get custom OpenAI configuration
+   * @returns Promise with CustomOpenAIConfig or null if not configured
+   */
+  async getCustomOpenAIConfig(): Promise<CustomOpenAIConfig | null> {
+    return invoke<CustomOpenAIConfig | null>('api_get_custom_openai_config');
+  }
+
+  /**
+   * Save custom OpenAI configuration
+   * @param config - CustomOpenAIConfig to save
+   * @returns Promise with result status
+   */
+  async saveCustomOpenAIConfig(config: CustomOpenAIConfig): Promise<{ status: string; message: string }> {
+    return invoke<{ status: string; message: string }>('api_save_custom_openai_config', {
+      displayName: config.displayName,
+      endpoint: config.endpoint,
+      apiKey: config.apiKey,
+      model: config.model,
+      maxTokens: config.maxTokens,
+      temperature: config.temperature,
+      topP: config.topP,
+    });
+  }
+
+  /**
+   * Test custom OpenAI connection
+   * @param endpoint - API endpoint URL
+   * @param apiKey - Optional API key
+   * @param model - Model name
+   * @returns Promise with test result
+   */
+  async testCustomOpenAIConnection(
+    endpoint: string,
+    apiKey: string | null,
+    model: string
+  ): Promise<{ status: string; message: string; http_status?: number }> {
+    return invoke<{ status: string; message: string; http_status?: number }>('api_test_custom_openai_connection', {
+      endpoint,
+      apiKey,
+      model,
+    });
   }
 }
 

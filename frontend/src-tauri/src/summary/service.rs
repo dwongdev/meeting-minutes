@@ -100,9 +100,9 @@ impl SummaryService {
             }
         };
 
-        // Validate and setup api_key, Flexible for Ollama and BuiltInAI
-        let api_key = if provider == LLMProvider::Ollama || provider == LLMProvider::BuiltInAI {
-            // These providers don't require API keys from database
+        // Validate and setup api_key, Flexible for Ollama, BuiltInAI, and CustomOpenAI
+        let api_key = if provider == LLMProvider::Ollama || provider == LLMProvider::BuiltInAI || provider == LLMProvider::CustomOpenAI {
+            // These providers don't require API keys from the standard database column
             String::new()
         } else {
             match SettingsRepository::get_api_key(&pool, &model_provider).await {
@@ -132,6 +132,42 @@ impl SummaryService {
             }
         } else {
             None
+        };
+
+        // Get CustomOpenAI config if provider is CustomOpenAI
+        let (custom_openai_endpoint, custom_openai_api_key, custom_openai_max_tokens, custom_openai_temperature, custom_openai_top_p) =
+            if provider == LLMProvider::CustomOpenAI {
+                match SettingsRepository::get_custom_openai_config(&pool).await {
+                    Ok(Some(config)) => {
+                        info!("✓ Using custom OpenAI endpoint: {}", config.endpoint);
+                        (
+                            Some(config.endpoint),
+                            config.api_key,
+                            config.max_tokens.map(|t| t as u32),
+                            config.temperature,
+                            config.top_p,
+                        )
+                    }
+                    Ok(None) => {
+                        let err_msg = "Custom OpenAI provider selected but no configuration found";
+                        Self::update_process_failed(&pool, &meeting_id, err_msg).await;
+                        return;
+                    }
+                    Err(e) => {
+                        let err_msg = format!("Failed to retrieve custom OpenAI config: {}", e);
+                        Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
+                        return;
+                    }
+                }
+            } else {
+                (None, None, None, None, None)
+            };
+
+        // For CustomOpenAI, use its API key (if any) instead of the empty string
+        let final_api_key = if provider == LLMProvider::CustomOpenAI {
+            custom_openai_api_key.unwrap_or_default()
+        } else {
+            api_key
         };
 
         // Dynamically fetch context size based on provider and model
@@ -176,7 +212,7 @@ impl SummaryService {
                 }
             }
         } else {
-            // Cloud providers (OpenAI, Claude, Groq) handle large contexts automatically
+            // Cloud providers (OpenAI, Claude, Groq, CustomOpenAI) handle large contexts automatically
             100000  // Effectively unlimited for single-pass processing
         };
 
@@ -189,12 +225,16 @@ impl SummaryService {
             &client,
             &provider,
             &model_name,
-            &api_key,
+            &final_api_key,
             &text,
             &custom_prompt,
             &template_id,
             token_threshold,
             ollama_endpoint.as_deref(),
+            custom_openai_endpoint.as_deref(),
+            custom_openai_max_tokens,
+            custom_openai_temperature,
+            custom_openai_top_p,
             app_data_dir.as_ref(),
             Some(&cancellation_token),
         )
