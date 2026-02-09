@@ -619,9 +619,9 @@ export function ModelSettingsModal({
     const updatedConfig = {
       ...modelConfig,
       apiKey: typeof apiKey === 'string' ? apiKey.trim() || null : null,
-      ollamaEndpoint: modelConfig.provider === 'ollama' && ollamaEndpoint.trim()
-        ? ollamaEndpoint.trim()
-        : null,
+      ollamaEndpoint: modelConfig.provider === 'ollama'
+        ? (ollamaEndpoint.trim() || null)
+        : (modelConfig.ollamaEndpoint || null),
       // Include custom OpenAI fields
       customOpenAIEndpoint: modelConfig.provider === 'custom-openai' ? customOpenAIEndpoint.trim() : null,
       customOpenAIModel: modelConfig.provider === 'custom-openai' ? customOpenAIModel.trim() : null,

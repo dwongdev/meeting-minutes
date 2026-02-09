@@ -158,60 +158,21 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const preferencesLoadedRef = useRef(false);
   const isLoadingRef = useRef(false);
 
-  // Format size helper function for Ollama models
-  const formatSize = (size: number): string => {
-    if (size < 1024) {
-      return `${size} B`;
-    } else if (size < 1024 * 1024) {
-      return `${(size / 1024).toFixed(1)} KB`;
-    } else if (size < 1024 * 1024 * 1024) {
-      return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-    } else {
-      return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-    }
-  };
-
-  // Load Ollama models on mount
+  // Load Ollama models (uses saved endpoint, re-runs when endpoint changes after config load)
   useEffect(() => {
     const loadModels = async () => {
       try {
-        const response = await fetch('http://localhost:11434/api/tags', {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const modelList = data.models.map((model: any) => ({
-          name: model.name,
-          id: model.model,
-          size: formatSize(model.size),
-          modified: model.modified_at
-        }));
+        const endpoint = modelConfig.ollamaEndpoint || null;
+        const modelList = await invoke<OllamaModel[]>('get_ollama_models', { endpoint });
         setModels(modelList);
+        setError('');
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load Ollama models');
         console.error('Error loading models:', err);
       }
     };
-
     loadModels();
-  }, []);
-
-  // Auto-select first Ollama model when models load
-  useEffect(() => {
-    if (models.length > 0 && modelConfig.provider === 'ollama') {
-      setModelConfig(prev => ({
-        ...prev,
-        model: models[0].name
-      }));
-    }
-  }, [models, modelConfig.provider]);
+  }, [modelConfig.ollamaEndpoint]);
 
   // Load transcript configuration on mount
   useEffect(() => {
