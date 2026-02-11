@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { RefreshCw, Mic, Speaker } from 'lucide-react';
-import { usePlatform } from '@/hooks/usePlatform';
 import { AudioLevelMeter, CompactAudioLevelMeter } from './AudioLevelMeter';
 import { AudioBackendSelector } from './AudioBackendSelector';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -46,26 +45,10 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
   const [audioLevels, setAudioLevels] = useState<Map<string, AudioLevelData>>(new Map());
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [showLevels, setShowLevels] = useState(false);
-  const platformName = usePlatform();
-  const isWindows = platformName === 'windows';
 
   // Filter devices by type
   const inputDevices = devices.filter(device => device.device_type === 'Input');
   const outputDevices = devices.filter(device => device.device_type === 'Output');
-
-  // Get default output device name for Windows display
-  const defaultOutputDevice = outputDevices.length > 0 ? outputDevices[0]?.name : 'Default System Audio';
-
-  // Handle platform-specific defaults
-  useEffect(() => {
-    // On Windows, force system device to null (use default)
-    if (isWindows && selectedDevices.systemDevice !== null) {
-      onDeviceChange({
-        ...selectedDevices,
-        systemDevice: null
-      });
-    }
-  }, [isWindows]);
 
   // Fetch available audio devices
   const fetchDevices = async () => {

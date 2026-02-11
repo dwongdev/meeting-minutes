@@ -103,20 +103,6 @@ export function ModelManager({
         });
 
         setModels(modelsWithDownloadState);
-
-        // Auto-select first available model on initial load
-        if (!hasUserSelection && !selectedModel) {
-          const recommendedModel = modelsWithDownloadState.find(m =>
-            m.name === 'base' && m.status === 'Available'
-          );
-          const anyAvailable = modelsWithDownloadState.find(m => m.status === 'Available');
-          const toSelect = recommendedModel || anyAvailable;
-
-          if (toSelect && onModelSelect) {
-            onModelSelect(toSelect.name);
-          }
-        }
-
         setInitialized(true);
       } catch (err) {
         console.error('Failed to initialize Whisper:', err);
@@ -389,12 +375,14 @@ export function ModelManager({
 
   const getDisplayName = (modelName: string): string => {
     const modelNameMapping: { [key: string]: string } = {
-      "base": "Small",
-      "small": "Medium",
-      "large-v3-turbo": "Large"
+      "small": "Small",
+      "medium-q5_0": "Medium",
+      "large-v3-q5_0": "Large V3 Compressed",
+      "large-v3-turbo": "Large V3 Turbo",
+      "large-v3": "Large V3"
     };
 
-    const basicModelNames = ["base", "small", "large-v3-turbo"];
+    const basicModelNames = ["small", "medium-q5_0", "large-v3-q5_0", "large-v3-turbo", "large-v3"];
     if (basicModelNames.includes(modelName)) {
       return modelNameMapping[modelName] || modelName;
     }
@@ -422,7 +410,7 @@ export function ModelManager({
     );
   }
 
-  const basicModelNames = ["base", "small", "large-v3-turbo"];
+  const basicModelNames = ["small", "medium-q5_0", "large-v3-q5_0", "large-v3-turbo", "large-v3"];
   const basicModels = models.filter(m => basicModelNames.includes(m.name))
     .sort((a, b) => basicModelNames.indexOf(a.name) - basicModelNames.indexOf(b.name));
   const advancedModels = models.filter(m => !basicModelNames.includes(m.name));
@@ -564,13 +552,15 @@ function ModelCard({
         </div>
       )}
 
-      <div className="p-4">
-        <div className="flex items-start justify-between mb-3">
+      <div className="p-3">
+        <div className="flex items-start justify-between mb-2">
           <div className="flex-1">
-            {/* Model Name */}
-            <div className="flex items-center gap-2 mb-1">
+            {/* Model Name and Tagline */}
+            <div className="flex items-center gap-2 flex-wrap mb-2">
               <span className="text-2xl">{getModelIcon(model.accuracy)}</span>
               <h3 className="font-semibold text-gray-900">{displayName}</h3>
+              <span className="text-sm text-gray-500">•</span>
+              <span className="text-sm text-gray-500">{getModelTagline(model.name, model.speed, model.accuracy)}</span>
               {isSelected && isAvailable && (
                 <motion.span
                   initial={{ scale: 0 }}
@@ -581,23 +571,19 @@ function ModelCard({
                 </motion.span>
               )}
               {isQuantizedModel(model.name) && (
-                <span className={`px-2 py-0.5 rounded-full text-xs ${
-                  getModelPerformanceBadge(model.name).color === 'green'
-                    ? 'bg-green-100 text-green-700'
-                    : getModelPerformanceBadge(model.name).color === 'orange'
-                      ? 'bg-orange-100 text-orange-700'
-                      : 'bg-gray-100 text-gray-700'
-                }`}>
+                <span className={`px-2 py-0.5 rounded-full text-xs ${getModelPerformanceBadge(model.name).color === 'green'
+                  ? 'bg-green-100 text-green-700'
+                  : getModelPerformanceBadge(model.name).color === 'orange'
+                    ? 'bg-orange-100 text-orange-700'
+                    : 'bg-gray-100 text-gray-700'
+                  }`}>
                   {getModelPerformanceBadge(model.name).label}
                 </span>
               )}
             </div>
 
-            {/* Tagline */}
-            <p className="text-sm text-gray-600 ml-9">{getModelTagline(model.name, model.speed, model.accuracy)}</p>
-
             {/* Model Specs */}
-            <div className="flex items-center space-x-4 text-sm text-gray-600 ml-9 mt-2">
+            <div className="flex items-center space-x-4 text-sm text-gray-600 ml-9 mt-1.5">
               <span className="flex items-center space-x-1">
                 <span>📦</span>
                 <span>{formatFileSize(model.size_mb)}</span>

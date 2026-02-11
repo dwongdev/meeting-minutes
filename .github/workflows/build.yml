@@ -560,6 +560,12 @@ jobs:
           echo "Copied llama-helper to frontend/src-tauri/binaries/llama-helper-${TARGET}"
           ls -la frontend/src-tauri/binaries/
 
+      - name: Cache FFmpeg binary
+        uses: actions/cache@v4
+        with:
+          path: frontend/src-tauri/binaries/ffmpeg-*
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}    
+
       - name: Build with Tauri
         id: tauri-build
         uses: tauri-apps/tauri-action@v0

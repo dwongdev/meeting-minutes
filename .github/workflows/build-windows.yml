@@ -660,6 +660,12 @@ jobs:
           Write-Host "Copied llama-helper to frontend/src-tauri/binaries/"
           Get-ChildItem "frontend/src-tauri/binaries/"
 
+      - name: Cache FFmpeg binary
+        uses: actions/cache@v4
+        with:
+          path: frontend/src-tauri/binaries/ffmpeg-*.exe
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
