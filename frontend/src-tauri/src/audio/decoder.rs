@@ -314,14 +314,14 @@ pub fn decode_audio_file_with_progress(
         .sample_rate
         .ok_or_else(|| anyhow!("Unknown sample rate"))?;
 
-    let channels = track
+    let mut channels = track
         .codec_params
         .channels
         .map(|c| c.count() as u16)
         .unwrap_or(1);
 
     debug!(
-        "Audio track: {}Hz, {} channels",
+        "Audio track: {}Hz, {} channels (from metadata)",
         sample_rate, channels
     );
 
@@ -370,6 +370,15 @@ pub fn decode_audio_file_with_progress(
                 if sample_buf.is_none() {
                     let spec = *decoded.spec();
                     let duration = decoded.capacity() as u64;
+                    // Detect actual channel count from decoded audio (metadata may be wrong/missing)
+                    let actual_channels = spec.channels.count() as u16;
+                    if actual_channels != channels {
+                        info!(
+                            "Channel count corrected: metadata={} actual={} (using actual)",
+                            channels, actual_channels
+                        );
+                        channels = actual_channels;
+                    }
                     sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
                 }
 
