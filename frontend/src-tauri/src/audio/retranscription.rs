@@ -1,8 +1,8 @@
 // Retranscription module - allows re-processing stored audio with different settings
 
-use crate::api::TranscriptSegment;
 use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
+use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use uuid::Uuid;
 
 /// Global flag to track if retranscription is in progress
 static RETRANSCRIPTION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -71,11 +70,7 @@ pub async fn start_retranscription<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<RetranscriptionResult> {
-    // Check if already in progress
-    if RETRANSCRIPTION_IN_PROGRESS.swap(true, Ordering::SeqCst) {
-        return Err(anyhow!("Retranscription already in progress"));
-    }
-
+    // Flag is already set atomically by start_retranscription_command via compare_exchange.
     // Reset cancellation flag
     RETRANSCRIPTION_CANCELLED.store(false, Ordering::SeqCst);
 
@@ -111,7 +106,7 @@ pub async fn start_retranscription<R: Runtime>(
 }
 
 /// Supported audio extensions for file discovery
-const AUDIO_EXTENSIONS: &[&str] = &["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac", "wma"];
+const AUDIO_EXTENSIONS: &[&str] = &["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac"];
 
 /// Find audio file in meeting folder
 /// Tries common names first, then scans for any file with an audio extension
@@ -169,8 +164,13 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    // Decode the audio file
-    let decoded = decode_audio_file(&audio_path)?;
+    // Decode the audio file (CPU-intensive, run in blocking task)
+    let path_for_decode = audio_path.clone();
+    let decoded = tokio::task::spawn_blocking(move || {
+        decode_audio_file(&path_for_decode)
+    })
+    .await
+    .map_err(|e| anyhow!("Decode task panicked: {}", e))??;
     let duration_seconds = decoded.duration_seconds;
 
     info!(
@@ -185,8 +185,12 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    // Convert to 16kHz mono format (used by both Whisper, Parakeet, and VAD)
-    let audio_samples = decoded.to_whisper_format();
+    // Convert to 16kHz mono format (CPU-intensive, run in blocking task)
+    let audio_samples = tokio::task::spawn_blocking(move || {
+        decoded.to_whisper_format()
+    })
+    .await
+    .map_err(|e| anyhow!("Resample task panicked: {}", e))?;
     info!("Converted to 16kHz mono format: {} samples", audio_samples.len());
 
     emit_progress(&app, &meeting_id, "vad", 20, "Detecting speech segments...");
@@ -383,21 +387,58 @@ async fn run_retranscription<R: Runtime>(
     emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
 
     // Create transcript segments with proper timestamps from VAD
-    let segments = create_transcript_segments_from_vad(&all_transcripts, avg_confidence);
+    let segments = create_transcript_segments(&all_transcripts);
 
     // Save to database
     let app_state = app
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
 
-    // Delete existing transcripts for this meeting
-    delete_meeting_transcripts(app_state.db_manager.pool(), &meeting_id).await?;
+    // Wrap delete+insert+update in a transaction to prevent data loss
+    let pool = app_state.db_manager.pool();
+    let mut conn = pool.acquire().await.map_err(|e| anyhow!("DB error: {}", e))?;
+    let mut tx = sqlx::Connection::begin(&mut *conn)
+        .await
+        .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
 
-    // Insert new transcripts
-    insert_meeting_transcripts(app_state.db_manager.pool(), &meeting_id, &segments).await?;
+    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
+        .bind(&meeting_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
 
-    // Update the meeting's transcription language
-    update_meeting_language(app_state.db_manager.pool(), &meeting_id, language.as_deref()).await?;
+    for segment in &segments {
+        sqlx::query(
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&segment.id)
+        .bind(&meeting_id)
+        .bind(&segment.text)
+        .bind(&segment.timestamp)
+        .bind(segment.audio_start_time)
+        .bind(segment.audio_end_time)
+        .bind(segment.duration)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
+    }
+
+    sqlx::query("UPDATE meetings SET transcription_language = ? WHERE id = ?")
+        .bind(language.as_deref())
+        .bind(&meeting_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| anyhow!("Failed to update meeting language: {}", e))?;
+
+    tx.commit().await
+        .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
+
+    info!(
+        "Updated {} transcripts for meeting {} in transaction",
+        segments.len(),
+        meeting_id
+    );
 
     // Write updated transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, &meeting_id, "saving", 90, "Writing transcript files...");
@@ -654,131 +695,6 @@ async fn get_configured_parakeet_model<R: Runtime>(app: &AppHandle<R>) -> Result
     }
 }
 
-/// Create transcript segments from VAD-segmented transcription results
-/// Each tuple is (text, start_ms, end_ms) from VAD timestamps
-fn create_transcript_segments_from_vad(
-    transcripts: &[(String, f64, f64)],
-    _avg_confidence: f32,
-) -> Vec<TranscriptSegment> {
-    transcripts
-        .iter()
-        .map(|(text, start_ms, end_ms)| {
-            let start_seconds = start_ms / 1000.0;
-            let end_seconds = end_ms / 1000.0;
-            let duration = end_seconds - start_seconds;
-
-            TranscriptSegment {
-                id: format!("transcript-{}", Uuid::new_v4()),
-                text: text.trim().to_string(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                audio_start_time: Some(start_seconds),
-                audio_end_time: Some(end_seconds),
-                duration: Some(duration),
-            }
-        })
-        .collect()
-}
-
-/// Delete existing transcripts for a meeting
-async fn delete_meeting_transcripts(
-    pool: &sqlx::SqlitePool,
-    meeting_id: &str,
-) -> Result<()> {
-    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
-        .bind(meeting_id)
-        .execute(pool)
-        .await
-        .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
-
-    info!("Deleted existing transcripts for meeting {}", meeting_id);
-    Ok(())
-}
-
-/// Insert new transcripts for a meeting
-async fn insert_meeting_transcripts(
-    pool: &sqlx::SqlitePool,
-    meeting_id: &str,
-    segments: &[TranscriptSegment],
-) -> Result<()> {
-    for segment in segments {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&segment.id)
-        .bind(meeting_id)
-        .bind(&segment.text)
-        .bind(&segment.timestamp)
-        .bind(segment.audio_start_time)
-        .bind(segment.audio_end_time)
-        .bind(segment.duration)
-        .execute(pool)
-        .await
-        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
-    }
-
-    info!(
-        "Inserted {} transcripts for meeting {}",
-        segments.len(),
-        meeting_id
-    );
-    Ok(())
-}
-
-/// Update the transcription language for a meeting
-async fn update_meeting_language(
-    pool: &sqlx::SqlitePool,
-    meeting_id: &str,
-    language: Option<&str>,
-) -> Result<()> {
-    sqlx::query("UPDATE meetings SET transcription_language = ? WHERE id = ?")
-        .bind(language)
-        .bind(meeting_id)
-        .execute(pool)
-        .await
-        .map_err(|e| anyhow!("Failed to update meeting language: {}", e))?;
-
-    info!(
-        "Updated transcription language for meeting {} to {:?}",
-        meeting_id, language
-    );
-    Ok(())
-}
-
-/// Write transcripts.json to a meeting folder (atomic write with temp file)
-fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegment]) -> Result<()> {
-    let transcript_path = folder.join("transcripts.json");
-    let temp_path = folder.join(".transcripts.json.tmp");
-
-    let json = serde_json::json!({
-        "version": "1.0",
-        "last_updated": chrono::Utc::now().to_rfc3339(),
-        "total_segments": segments.len(),
-        "segments": segments.iter().enumerate().map(|(i, s)| {
-            serde_json::json!({
-                "id": s.id,
-                "text": s.text,
-                "timestamp": s.timestamp,
-                "audio_start_time": s.audio_start_time,
-                "audio_end_time": s.audio_end_time,
-                "duration": s.duration,
-                "sequence_id": i
-            })
-        }).collect::<Vec<_>>()
-    });
-
-    let json_string = serde_json::to_string_pretty(&json)?;
-    std::fs::write(&temp_path, &json_string)?;
-    std::fs::rename(&temp_path, &transcript_path)?;
-
-    info!(
-        "Wrote transcripts.json with {} segments to {}",
-        segments.len(),
-        transcript_path.display()
-    );
-    Ok(())
-}
-
 /// Write or update metadata.json for retranscription (preserves existing fields, adds retranscribed_at)
 fn write_retranscription_metadata(
     folder: &Path,
@@ -823,90 +739,6 @@ fn write_retranscription_metadata(
     Ok(())
 }
 
-/// Split a long speech segment at the lowest-energy (silence) point near the target size.
-///
-/// Scans for 100ms windows with minimal RMS energy within ±3 seconds of each target
-/// split point. If no clear silence is found, falls back to a 1-second overlap split
-/// to avoid cutting words at boundaries.
-fn split_segment_at_silence(
-    segment: &crate::audio::vad::SpeechSegment,
-    max_samples: usize,
-) -> Vec<crate::audio::vad::SpeechSegment> {
-    const SAMPLE_RATE: usize = 16000;
-    const ENERGY_WINDOW: usize = SAMPLE_RATE / 10; // 100ms
-    const SEARCH_RADIUS: usize = SAMPLE_RATE * 3; // ±3 seconds
-    const SILENCE_RMS_THRESHOLD: f32 = 0.02;
-    const FALLBACK_OVERLAP: usize = SAMPLE_RATE; // 1 second
-
-    let total = segment.samples.len();
-    if total <= max_samples {
-        return vec![segment.clone()];
-    }
-
-    let ms_per_sample = (segment.end_timestamp_ms - segment.start_timestamp_ms)
-        / segment.samples.len() as f64;
-    let mut result = Vec::new();
-    let mut pos = 0usize;
-
-    while pos < total {
-        let remaining = total - pos;
-        if remaining <= max_samples {
-            let chunk_samples = segment.samples[pos..].to_vec();
-            let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * ms_per_sample);
-            let chunk_end_ms = segment.end_timestamp_ms;
-            result.push(crate::audio::vad::SpeechSegment {
-                samples: chunk_samples,
-                start_timestamp_ms: chunk_start_ms,
-                end_timestamp_ms: chunk_end_ms,
-                confidence: segment.confidence,
-            });
-            break;
-        }
-
-        let target = pos + max_samples;
-        let search_start = target.saturating_sub(SEARCH_RADIUS).max(pos + SAMPLE_RATE);
-        let search_end = (target + SEARCH_RADIUS).min(total.saturating_sub(ENERGY_WINDOW));
-
-        let mut best_split = target.min(total);
-        let mut best_rms = f32::MAX;
-
-        if search_start + ENERGY_WINDOW <= search_end {
-            let mut idx = search_start;
-            while idx + ENERGY_WINDOW <= search_end {
-                let window = &segment.samples[idx..idx + ENERGY_WINDOW];
-                let rms = (window.iter().map(|s| s * s).sum::<f32>() / ENERGY_WINDOW as f32).sqrt();
-                if rms < best_rms {
-                    best_rms = rms;
-                    best_split = idx + ENERGY_WINDOW / 2;
-                }
-                idx += SAMPLE_RATE / 100; // step 10ms
-            }
-        }
-
-        let split_at = best_split;
-        let chunk_end = if best_rms > SILENCE_RMS_THRESHOLD {
-            (split_at + FALLBACK_OVERLAP).min(total)
-        } else {
-            split_at
-        };
-
-        let chunk_samples = segment.samples[pos..chunk_end].to_vec();
-        let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * ms_per_sample);
-        let chunk_end_ms = segment.start_timestamp_ms + (chunk_end as f64 * ms_per_sample);
-
-        result.push(crate::audio::vad::SpeechSegment {
-            samples: chunk_samples,
-            start_timestamp_ms: chunk_start_ms,
-            end_timestamp_ms: chunk_end_ms,
-            confidence: segment.confidence,
-        });
-
-        pos = split_at;
-    }
-
-    result
-}
-
 // Tauri commands
 
 /// Response when retranscription is started
@@ -925,16 +757,15 @@ pub async fn start_retranscription_command<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<RetranscriptionStarted, String> {
-    // Check if already in progress before spawning
-    if RETRANSCRIPTION_IN_PROGRESS.load(Ordering::SeqCst) {
+    // Atomically check and set the flag to prevent TOCTOU race
+    if RETRANSCRIPTION_IN_PROGRESS.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return Err("Retranscription already in progress".to_string());
     }
 
     // Clone values for the spawned task
     let meeting_id_clone = meeting_id.clone();
 
-    // Spawn the retranscription in a background task
-    // This allows the command to return immediately while work continues
+    // Spawn the retranscription in a background task (flag already set above)
     tauri::async_runtime::spawn(async move {
         let result = start_retranscription(
             app,
@@ -978,18 +809,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_create_transcript_segments_from_vad_empty() {
+    fn test_create_transcript_segments_empty() {
         let transcripts: Vec<(String, f64, f64)> = vec![];
-        let segments = create_transcript_segments_from_vad(&transcripts, 0.9);
+        let segments = create_transcript_segments(&transcripts);
         assert!(segments.is_empty());
     }
 
     #[test]
-    fn test_create_transcript_segments_from_vad_single() {
+    fn test_create_transcript_segments_single() {
         let transcripts = vec![
             ("Hello world".to_string(), 0.0, 1500.0), // 0-1.5 seconds
         ];
-        let segments = create_transcript_segments_from_vad(&transcripts, 0.9);
+        let segments = create_transcript_segments(&transcripts);
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "Hello world");
@@ -999,13 +830,13 @@ mod tests {
     }
 
     #[test]
-    fn test_create_transcript_segments_from_vad_multiple() {
+    fn test_create_transcript_segments_multiple() {
         let transcripts = vec![
             ("First segment".to_string(), 0.0, 2000.0),      // 0-2 seconds
             ("Second segment".to_string(), 3000.0, 5000.0),  // 3-5 seconds
             ("Third segment".to_string(), 6500.0, 8000.0),   // 6.5-8 seconds
         ];
-        let segments = create_transcript_segments_from_vad(&transcripts, 0.85);
+        let segments = create_transcript_segments(&transcripts);
 
         assert_eq!(segments.len(), 3);
 
@@ -1029,11 +860,11 @@ mod tests {
     }
 
     #[test]
-    fn test_create_transcript_segments_from_vad_trims_whitespace() {
+    fn test_create_transcript_segments_trims_whitespace() {
         let transcripts = vec![
             ("  Hello with spaces  ".to_string(), 0.0, 1000.0),
         ];
-        let segments = create_transcript_segments_from_vad(&transcripts, 0.9);
+        let segments = create_transcript_segments(&transcripts);
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "Hello with spaces");
@@ -1045,7 +876,7 @@ mod tests {
             ("Segment one".to_string(), 0.0, 1000.0),
             ("Segment two".to_string(), 1000.0, 2000.0),
         ];
-        let segments = create_transcript_segments_from_vad(&transcripts, 0.9);
+        let segments = create_transcript_segments(&transcripts);
 
         assert_eq!(segments.len(), 2);
         assert_ne!(segments[0].id, segments[1].id);
@@ -1146,7 +977,7 @@ mod tests {
         assert!(AUDIO_EXTENSIONS.contains(&"flac"));
         assert!(AUDIO_EXTENSIONS.contains(&"ogg"));
         assert!(AUDIO_EXTENSIONS.contains(&"aac"));
-        assert!(AUDIO_EXTENSIONS.contains(&"wma"));
+        assert!(!AUDIO_EXTENSIONS.contains(&"wma"));
         assert!(!AUDIO_EXTENSIONS.contains(&"txt"));
         assert!(!AUDIO_EXTENSIONS.contains(&"pdf"));
     }

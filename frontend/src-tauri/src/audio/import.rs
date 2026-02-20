@@ -17,6 +17,7 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
+use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
 use super::recording_preferences::get_default_recordings_folder;
 
 /// Global flag to track if import is in progress
@@ -32,7 +33,7 @@ static IMPORT_CANCELLED: AtomicBool = AtomicBool::new(false);
 const VAD_REDEMPTION_TIME_MS: u32 = 2000;
 
 /// Supported audio file extensions
-const AUDIO_EXTENSIONS: &[&str] = &["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac", "wma"];
+const AUDIO_EXTENSIONS: &[&str] = &["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac"];
 
 /// Information about a selected audio file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,11 +218,7 @@ pub async fn start_import<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<ImportResult> {
-    // Check if already in progress
-    if IMPORT_IN_PROGRESS.swap(true, Ordering::SeqCst) {
-        return Err(anyhow!("Import already in progress"));
-    }
-
+    // Flag is already set atomically by start_import_audio_command via compare_exchange.
     // Reset cancellation flag
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
@@ -310,7 +307,11 @@ async fn run_import<R: Runtime>(
     );
     let dest_path = meeting_folder.join(&dest_filename);
 
-    std::fs::copy(&source, &dest_path)
+    let src = source.clone();
+    let dst = dest_path.clone();
+    tokio::task::spawn_blocking(move || std::fs::copy(&src, &dst))
+        .await
+        .map_err(|e| anyhow!("Copy task join error: {}", e))?
         .map_err(|e| anyhow!("Failed to copy audio file: {}", e))?;
 
     info!("Copied audio to: {}", dest_path.display());
@@ -332,7 +333,12 @@ async fn run_import<R: Runtime>(
         emit_progress(&app_for_decode, "decoding", overall_progress, msg);
     });
 
-    let decoded = decode_audio_file_with_progress(&dest_path, Some(decode_progress))?;
+    let path_for_decode = dest_path.clone();
+    let decoded = tokio::task::spawn_blocking(move || {
+        decode_audio_file_with_progress(&path_for_decode, Some(decode_progress))
+    })
+    .await
+    .map_err(|e| anyhow!("Decode task join error: {}", e))??;
     let duration_seconds = decoded.duration_seconds;
 
     info!(
@@ -356,7 +362,11 @@ async fn run_import<R: Runtime>(
         emit_progress(&app_for_resample, "resampling", overall_progress, msg);
     });
 
-    let audio_samples = decoded.to_whisper_format_with_progress(Some(resample_progress));
+    let audio_samples = tokio::task::spawn_blocking(move || {
+        decoded.to_whisper_format_with_progress(Some(resample_progress))
+    })
+    .await
+    .map_err(|e| anyhow!("Resample task join error: {}", e))?;
     info!(
         "Converted to 16kHz mono format: {} samples",
         audio_samples.len()
@@ -617,26 +627,6 @@ fn emit_progress<R: Runtime>(app: &AppHandle<R>, stage: &str, progress: u32, mes
     );
 }
 
-/// Create transcript segments from transcription results
-fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> Vec<TranscriptSegment> {
-    transcripts
-        .iter()
-        .map(|(text, start_ms, end_ms)| {
-            let start_seconds = start_ms / 1000.0;
-            let end_seconds = end_ms / 1000.0;
-            let duration = end_seconds - start_seconds;
-
-            TranscriptSegment {
-                id: format!("transcript-{}", Uuid::new_v4()),
-                text: text.trim().to_string(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                audio_start_time: Some(start_seconds),
-                audio_end_time: Some(end_seconds),
-                duration: Some(duration),
-            }
-        })
-        .collect()
-}
 
 /// Create a new meeting with transcripts in the database
 async fn create_meeting_with_transcripts(
@@ -829,40 +819,6 @@ async fn get_configured_model<R: Runtime>(app: &AppHandle<R>, provider_type: &st
     }
 }
 
-/// Write transcripts.json to a meeting folder (atomic write with temp file)
-fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegment]) -> Result<()> {
-    let transcript_path = folder.join("transcripts.json");
-    let temp_path = folder.join(".transcripts.json.tmp");
-
-    let json = serde_json::json!({
-        "version": "1.0",
-        "last_updated": chrono::Utc::now().to_rfc3339(),
-        "total_segments": segments.len(),
-        "segments": segments.iter().enumerate().map(|(i, s)| {
-            serde_json::json!({
-                "id": s.id,
-                "text": s.text,
-                "timestamp": s.timestamp,
-                "audio_start_time": s.audio_start_time,
-                "audio_end_time": s.audio_end_time,
-                "duration": s.duration,
-                "sequence_id": i
-            })
-        }).collect::<Vec<_>>()
-    });
-
-    let json_string = serde_json::to_string_pretty(&json)?;
-    std::fs::write(&temp_path, &json_string)?;
-    std::fs::rename(&temp_path, &transcript_path)?;
-
-    info!(
-        "Wrote transcripts.json with {} segments to {}",
-        segments.len(),
-        transcript_path.display()
-    );
-    Ok(())
-}
-
 /// Write metadata.json to a meeting folder (atomic write with temp file)
 fn write_import_metadata(
     folder: &Path,
@@ -895,119 +851,6 @@ fn write_import_metadata(
 
     info!("Wrote metadata.json to {}", metadata_path.display());
     Ok(())
-}
-
-/// Split a long speech segment at the lowest-energy (silence) point near the target size.
-///
-/// Scans for 100ms windows with minimal RMS energy within ±3 seconds of each target
-/// split point. If no clear silence is found, falls back to a 1-second overlap split
-/// to avoid cutting words at boundaries.
-fn split_segment_at_silence(
-    segment: &crate::audio::vad::SpeechSegment,
-    max_samples: usize,
-) -> Vec<crate::audio::vad::SpeechSegment> {
-    const SAMPLE_RATE: usize = 16000;
-    // 100ms window for energy measurement (1600 samples at 16kHz)
-    const ENERGY_WINDOW: usize = SAMPLE_RATE / 10;
-    // Search ±3 seconds around the target split point
-    const SEARCH_RADIUS: usize = SAMPLE_RATE * 3;
-    // RMS threshold below which we consider a window "silent"
-    const SILENCE_RMS_THRESHOLD: f32 = 0.02;
-    // Overlap to use when no silence boundary is found (1 second)
-    const FALLBACK_OVERLAP: usize = SAMPLE_RATE;
-
-    let total = segment.samples.len();
-    if total <= max_samples {
-        return vec![segment.clone()];
-    }
-
-    let ms_per_sample = (segment.end_timestamp_ms - segment.start_timestamp_ms)
-        / segment.samples.len() as f64;
-    let mut result = Vec::new();
-    let mut pos = 0usize;
-
-    while pos < total {
-        let remaining = total - pos;
-        if remaining <= max_samples {
-            // Last chunk — take everything remaining
-            let chunk_samples = segment.samples[pos..].to_vec();
-            let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * ms_per_sample);
-            let chunk_end_ms = segment.end_timestamp_ms;
-            result.push(crate::audio::vad::SpeechSegment {
-                samples: chunk_samples,
-                start_timestamp_ms: chunk_start_ms,
-                end_timestamp_ms: chunk_end_ms,
-                confidence: segment.confidence,
-            });
-            break;
-        }
-
-        // Target split point
-        let target = pos + max_samples;
-
-        // Search window: [target - SEARCH_RADIUS, target + SEARCH_RADIUS]
-        let search_start = target.saturating_sub(SEARCH_RADIUS).max(pos + SAMPLE_RATE);
-        let search_end = (target + SEARCH_RADIUS).min(total.saturating_sub(ENERGY_WINDOW));
-
-        // Find the lowest-energy 100ms window in the search range
-        let mut best_split = target.min(total); // fallback: exact target
-        let mut best_rms = f32::MAX;
-
-        if search_start + ENERGY_WINDOW <= search_end {
-            let mut idx = search_start;
-            while idx + ENERGY_WINDOW <= search_end {
-                let window = &segment.samples[idx..idx + ENERGY_WINDOW];
-                let rms = (window.iter().map(|s| s * s).sum::<f32>() / ENERGY_WINDOW as f32).sqrt();
-                if rms < best_rms {
-                    best_rms = rms;
-                    best_split = idx + ENERGY_WINDOW / 2; // split at center of quiet window
-                }
-                // Step by 10ms (160 samples) for efficiency
-                idx += SAMPLE_RATE / 100;
-            }
-        }
-
-        let split_at;
-        if best_rms <= SILENCE_RMS_THRESHOLD {
-            // Found a silence boundary — clean split
-            split_at = best_split;
-            debug!(
-                "Splitting at silence boundary: sample {} (RMS={:.4})",
-                split_at, best_rms
-            );
-        } else {
-            // No clear silence — use overlap to avoid losing words
-            split_at = best_split;
-            debug!(
-                "No silence found near target (best RMS={:.4}), splitting with overlap at sample {}",
-                best_rms, split_at
-            );
-        }
-
-        // Determine the actual end of this chunk (with overlap if no silence)
-        let chunk_end = if best_rms > SILENCE_RMS_THRESHOLD {
-            (split_at + FALLBACK_OVERLAP).min(total)
-        } else {
-            split_at
-        };
-
-        let chunk_samples = segment.samples[pos..chunk_end].to_vec();
-        let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * ms_per_sample);
-        let chunk_end_ms = segment.start_timestamp_ms + (chunk_end as f64 * ms_per_sample);
-
-        result.push(crate::audio::vad::SpeechSegment {
-            samples: chunk_samples,
-            start_timestamp_ms: chunk_start_ms,
-            end_timestamp_ms: chunk_end_ms,
-            confidence: segment.confidence,
-        });
-
-        // Advance position: if we used overlap, start next chunk at the split point
-        // (not at chunk_end) so the overlap region is transcribed by both chunks
-        pos = split_at;
-    }
-
-    result
 }
 
 // ============================================================================
@@ -1064,11 +907,11 @@ pub async fn start_import_audio_command<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<ImportStarted, String> {
-    if IMPORT_IN_PROGRESS.load(Ordering::SeqCst) {
+    if IMPORT_IN_PROGRESS.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return Err("Import already in progress".to_string());
     }
 
-    // Spawn import in background
+    // Spawn import in background (flag already set atomically above)
     tauri::async_runtime::spawn(async move {
         let result = start_import(app, source_path, title, language, model, provider).await;
 

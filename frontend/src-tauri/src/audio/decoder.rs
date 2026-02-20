@@ -236,6 +236,7 @@ fn normalize_audio_samples(mut samples: Vec<f32>) -> Vec<f32> {
     // First, find the maximum absolute value
     let max_abs = samples
         .iter()
+        .filter(|s| s.is_finite())
         .map(|s| s.abs())
         .fold(0.0f32, |a, b| a.max(b));
 
@@ -652,7 +653,8 @@ mod tests {
     fn test_normalize_audio_samples_handles_infinity() {
         let samples = vec![0.5, f32::INFINITY, -0.3];
         let result = normalize_audio_samples(samples);
-        // Infinity will be clamped to 0.0 (since !is_finite)
-        assert_eq!(result[1], 0.0);
+        assert!((result[0] - 0.5).abs() < 0.001); // preserved
+        assert_eq!(result[1], 0.0); // infinity → 0
+        assert!((result[2] - (-0.3)).abs() < 0.001); // preserved
     }
 }

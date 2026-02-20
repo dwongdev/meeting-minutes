@@ -14,6 +14,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { useImportDialog } from '@/contexts/ImportDialogContext';
 
 import {
   Dialog,
@@ -57,6 +58,7 @@ const Sidebar: React.FC = () => {
 
   // Get recording state from RecordingStateContext (single source of truth)
   const { isRecording } = useRecordingState();
+  const { openImportDialog } = useImportDialog();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['meetings']));
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showModelSettings, setShowModelSettings] = useState(false);
@@ -489,7 +491,7 @@ const Sidebar: React.FC = () => {
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={() => (window as any).openImportDialog?.()}
+                onClick={() => openImportDialog()}
                 className="p-2 rounded-lg transition-colors duration-150 hover:bg-blue-100 bg-blue-50"
               >
                 <Upload className="w-5 h-5 text-blue-600" />
@@ -787,7 +789,7 @@ const Sidebar: React.FC = () => {
             </button>
 
             <button
-              onClick={() => (window as any).openImportDialog?.()}
+              onClick={() => openImportDialog()}
               className="w-full flex items-center justify-center px-3 py-2 mt-1 text-sm font-medium text-gray-700 bg-blue-100 hover:bg-blue-200 rounded-lg transition-colors shadow-sm"
             >
               <Upload className="w-4 h-4 mr-2" />

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 
@@ -34,7 +34,7 @@ export interface UseRetranscriptionReturn {
   progress: RetranscriptionProgress | null;
   error: string | null;
   isProcessing: boolean;
-  startRetranscription: (folderPath: string, language?: string | null, model?: string | null) => Promise<void>;
+  startRetranscription: (folderPath: string, language?: string | null, model?: string | null, provider?: string | null) => Promise<void>;
   cancelRetranscription: () => Promise<void>;
   reset: () => void;
 }
@@ -48,7 +48,13 @@ export function useRetranscription({
   const [progress, setProgress] = useState<RetranscriptionProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Set up event listeners
+  // Stable refs for callbacks to avoid listener re-registration
+  const onCompleteRef = useRef(onComplete);
+  const onErrorRef = useRef(onError);
+  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
+
+  // Set up event listeners (re-register only when meetingId changes)
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
 
@@ -72,7 +78,7 @@ export function useRetranscription({
           if (event.payload.meeting_id === meetingId) {
             setStatus('complete');
             setProgress(null);
-            onComplete?.(event.payload);
+            onCompleteRef.current?.(event.payload);
           }
         }
       );
@@ -85,7 +91,7 @@ export function useRetranscription({
           if (event.payload.meeting_id === meetingId) {
             setStatus('error');
             setError(event.payload.error);
-            onError?.(event.payload.error);
+            onErrorRef.current?.(event.payload.error);
           }
         }
       );
@@ -97,10 +103,10 @@ export function useRetranscription({
     return () => {
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [meetingId, onComplete, onError]);
+  }, [meetingId]);
 
   const startRetranscription = useCallback(
-    async (folderPath: string, language?: string | null, model?: string | null) => {
+    async (folderPath: string, language?: string | null, model?: string | null, provider?: string | null) => {
       setStatus('processing');
       setError(null);
       setProgress(null);
@@ -111,14 +117,15 @@ export function useRetranscription({
           meetingFolderPath: folderPath,
           language: language || null,
           model: model || null,
+          provider: provider || null,
         });
       } catch (err: any) {
         setStatus('error');
         setError(err.message || 'Failed to start retranscription');
-        onError?.(err.message || 'Failed to start retranscription');
+        onErrorRef.current?.(err.message || 'Failed to start retranscription');
       }
     },
-    [meetingId, onError]
+    [meetingId]
   );
 
   const cancelRetranscription = useCallback(async () => {

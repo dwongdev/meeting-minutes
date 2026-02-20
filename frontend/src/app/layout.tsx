@@ -22,6 +22,7 @@ import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgr
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
+import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 
 const sourceSans3 = Source_Sans_3({
   subsets: ['latin'],
@@ -32,7 +33,7 @@ const sourceSans3 = Source_Sans_3({
 // export { metadata } from './metadata'
 
 // Audio file extensions for drag-drop filtering
-const AUDIO_EXTENSIONS = ['mp4', 'm4a', 'wav', 'mp3', 'flac', 'ogg', 'aac', 'wma'];
+const AUDIO_EXTENSIONS = ['mp4', 'm4a', 'wav', 'mp3', 'flac', 'ogg', 'aac'];
 
 export default function RootLayout({
   children,
@@ -159,16 +160,10 @@ export default function RootLayout({
     }
   }, []);
 
-  // Expose function to open import dialog from sidebar
-  useEffect(() => {
-    (window as any).openImportDialog = () => {
-      setImportFilePath(null);
-      setShowImportDialog(true);
-    };
-
-    return () => {
-      delete (window as any).openImportDialog;
-    };
+  // Handler for ImportDialogProvider - opens import dialog from any child component
+  const handleOpenImportDialog = useCallback((filePath?: string | null) => {
+    setImportFilePath(filePath ?? null);
+    setShowImportDialog(true);
   }, []);
 
   const handleOnboardingComplete = () => {
@@ -192,25 +187,27 @@ export default function RootLayout({
                       <SidebarProvider>
                         <TooltipProvider>
                           <RecordingPostProcessingProvider>
-                            {/* Download progress toast provider - listens for background downloads */}
-                            <DownloadProgressToastProvider />
+                            <ImportDialogProvider onOpen={handleOpenImportDialog}>
+                              {/* Download progress toast provider - listens for background downloads */}
+                              <DownloadProgressToastProvider />
 
-                            {/* Show onboarding or main app */}
-                            {showOnboarding ? (
-                              <OnboardingFlow onComplete={handleOnboardingComplete} />
-                            ) : (
-                              <div className="flex">
-                                <Sidebar />
-                                <MainContent>{children}</MainContent>
-                              </div>
-                            )}
-                            {/* Import audio overlay and dialog */}
-                            <ImportDropOverlay visible={showDropOverlay} />
-                            <ImportAudioDialog
-                              open={showImportDialog}
-                              onOpenChange={handleImportDialogClose}
-                              preselectedFile={importFilePath}
-                            />
+                              {/* Show onboarding or main app */}
+                              {showOnboarding ? (
+                                <OnboardingFlow onComplete={handleOnboardingComplete} />
+                              ) : (
+                                <div className="flex">
+                                  <Sidebar />
+                                  <MainContent>{children}</MainContent>
+                                </div>
+                              )}
+                              {/* Import audio overlay and dialog */}
+                              <ImportDropOverlay visible={showDropOverlay} />
+                              <ImportAudioDialog
+                                open={showImportDialog}
+                                onOpenChange={handleImportDialogClose}
+                                preselectedFile={importFilePath}
+                              />
+                            </ImportDialogProvider>
                           </RecordingPostProcessingProvider>
                         </TooltipProvider>
                       </SidebarProvider>

@@ -36,30 +36,7 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { useImportAudio, AudioFileInfo, ImportResult } from '@/hooks/useImportAudio';
 import { useRouter } from 'next/navigation';
 import { useSidebar } from '../Sidebar/SidebarProvider';
-
-// ISO 639-1 language codes supported by Whisper
-const LANGUAGES = [
-  { code: 'auto', name: 'Auto Detect (Original Language)' },
-  { code: 'auto-translate', name: 'Auto Detect (Translate to English)' },
-  { code: 'en', name: 'English' },
-  { code: 'zh', name: 'Chinese' },
-  { code: 'de', name: 'German' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'ru', name: 'Russian' },
-  { code: 'ko', name: 'Korean' },
-  { code: 'fr', name: 'French' },
-  { code: 'ja', name: 'Japanese' },
-  { code: 'pt', name: 'Portuguese' },
-  { code: 'tr', name: 'Turkish' },
-  { code: 'pl', name: 'Polish' },
-  { code: 'nl', name: 'Dutch' },
-  { code: 'ar', name: 'Arabic' },
-  { code: 'sv', name: 'Swedish' },
-  { code: 'it', name: 'Italian' },
-  { code: 'hi', name: 'Hindi' },
-  { code: 'vi', name: 'Vietnamese' },
-  { code: 'uk', name: 'Ukrainian' },
-];
+import { LANGUAGES } from '@/constants/languages';
 
 interface RawModelInfo {
   name: string;
@@ -128,11 +105,6 @@ export function ImportAudioDialog({
     // Refresh meetings list
     refetchMeetings();
 
-    // Auto-navigate after a short delay
-    setTimeout(() => {
-      router.push(`/meeting-details?id=${result.meeting_id}`);
-    }, 2000);
-
     onComplete?.();
     onOpenChange(false);
   }, [router, refetchMeetings, onComplete, onOpenChange]);
@@ -147,6 +119,7 @@ export function ImportAudioDialog({
     progress,
     error,
     isProcessing,
+    isBusy,
     selectFile,
     validateFile,
     startImport,
@@ -247,6 +220,15 @@ export function ImportAudioDialog({
     return availableModels.find((m) => m.provider === provider && m.name === name);
   };
 
+  const selectedModel = getSelectedModel();
+  const isParakeetModel = selectedModel?.provider === 'parakeet';
+
+  useEffect(() => {
+    if (isParakeetModel && selectedLang !== 'auto') {
+      setSelectedLang('auto');
+    }
+  }, [isParakeetModel, selectedLang]);
+
   const handleSelectFile = async () => {
     const info = await selectFile();
     if (info) {
@@ -257,11 +239,10 @@ export function ImportAudioDialog({
   const handleStartImport = async () => {
     if (!fileInfo) return;
 
-    const selectedModel = getSelectedModel();
     await startImport(
       fileInfo.path,
       title || fileInfo.filename,
-      selectedLang === 'auto' ? null : selectedLang,
+      isParakeetModel ? null : selectedLang === 'auto' ? null : selectedLang,
       selectedModel?.name || null,
       selectedModel?.provider || null
     );
@@ -411,24 +392,36 @@ export function ImportAudioDialog({
                   {showAdvanced && (
                     <div className="p-3 pt-0 space-y-4 border-t">
                       {/* Language selector */}
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Globe className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm font-medium">Language</span>
+                      {!isParakeetModel ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Globe className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-sm font-medium">Language</span>
+                          </div>
+                          <Select value={selectedLang} onValueChange={setSelectedLang}>
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Select language" />
+                            </SelectTrigger>
+                            <SelectContent className="max-h-60">
+                              {LANGUAGES.map((lang) => (
+                                <SelectItem key={lang.code} value={lang.code}>
+                                  {lang.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
-                        <Select value={selectedLang} onValueChange={setSelectedLang}>
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Select language" />
-                          </SelectTrigger>
-                          <SelectContent className="max-h-60">
-                            {LANGUAGES.map((lang) => (
-                              <SelectItem key={lang.code} value={lang.code}>
-                                {lang.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Globe className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-sm font-medium">Language</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Language selection isn't supported for Parakeet. It always uses automatic detection.
+                          </p>
+                        </div>
+                      )}
 
                       {/* Model selector */}
                       {availableModels.length > 0 && (

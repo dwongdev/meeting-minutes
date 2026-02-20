@@ -39,6 +39,9 @@ pub mod playback_monitor; // NEW: Playback device detection for BT warnings
 // Transcription module (provider abstraction, engine management, worker pool)
 pub mod transcription;
 
+// Shared utilities for import and retranscription
+pub(crate) mod common;
+
 // Retranscription module (re-process stored audio with different settings)
 pub mod retranscription;
 

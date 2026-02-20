@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { RefreshCw, Globe, Loader2, AlertCircle, CheckCircle2, X, Cpu } from 'lucide-react';
 import {
   Dialog,
@@ -20,47 +20,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
-
-// ISO 639-1 language codes supported by Whisper
-const LANGUAGES = [
-  { code: 'auto', name: 'Auto Detect (Original Language)' },
-  { code: 'auto-translate', name: 'Auto Detect (Translate to English)' },
-  { code: 'en', name: 'English' },
-  { code: 'zh', name: 'Chinese' },
-  { code: 'de', name: 'German' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'ru', name: 'Russian' },
-  { code: 'ko', name: 'Korean' },
-  { code: 'fr', name: 'French' },
-  { code: 'ja', name: 'Japanese' },
-  { code: 'pt', name: 'Portuguese' },
-  { code: 'tr', name: 'Turkish' },
-  { code: 'pl', name: 'Polish' },
-  { code: 'ca', name: 'Catalan' },
-  { code: 'nl', name: 'Dutch' },
-  { code: 'ar', name: 'Arabic' },
-  { code: 'sv', name: 'Swedish' },
-  { code: 'it', name: 'Italian' },
-  { code: 'id', name: 'Indonesian' },
-  { code: 'hi', name: 'Hindi' },
-  { code: 'fi', name: 'Finnish' },
-  { code: 'vi', name: 'Vietnamese' },
-  { code: 'he', name: 'Hebrew' },
-  { code: 'uk', name: 'Ukrainian' },
-  { code: 'el', name: 'Greek' },
-  { code: 'ms', name: 'Malay' },
-  { code: 'cs', name: 'Czech' },
-  { code: 'ro', name: 'Romanian' },
-  { code: 'da', name: 'Danish' },
-  { code: 'hu', name: 'Hungarian' },
-  { code: 'ta', name: 'Tamil' },
-  { code: 'no', name: 'Norwegian' },
-  { code: 'th', name: 'Thai' },
-  { code: 'ur', name: 'Urdu' },
-  { code: 'hr', name: 'Croatian' },
-  { code: 'bg', name: 'Bulgarian' },
-  { code: 'lt', name: 'Lithuanian' },
-];
+import { LANGUAGES } from '@/constants/languages';
 
 interface RetranscribeDialogProps {
   open: boolean;
@@ -118,12 +78,27 @@ export function RetranscribeDialog({
   const [selectedModelKey, setSelectedModelKey] = useState<string>(''); // Format: "provider:model"
   const [loadingModels, setLoadingModels] = useState(false);
 
+  // Stable refs for callbacks to avoid listener re-registration
+  const onCompleteRef = useRef(onComplete);
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
+  useEffect(() => { onOpenChangeRef.current = onOpenChange; }, [onOpenChange]);
+
   // Helper to get selected model details
   const getSelectedModel = (): ModelOption | undefined => {
     if (!selectedModelKey) return undefined;
     const [provider, name] = selectedModelKey.split(':');
     return availableModels.find(m => m.provider === provider && m.name === name);
   };
+
+  const selectedModelDetails = getSelectedModel();
+  const isParakeetModel = selectedModelDetails?.provider === 'parakeet';
+
+  useEffect(() => {
+    if (isParakeetModel && selectedLang !== 'auto') {
+      setSelectedLang('auto');
+    }
+  }, [isParakeetModel, selectedLang]);
 
   // Reset state and fetch models when dialog opens
   useEffect(() => {
@@ -222,8 +197,8 @@ export function RetranscribeDialog({
             toast.success(
               `Retranscription complete! ${event.payload.segments_count} segments created.`
             );
-            onComplete?.();
-            onOpenChange(false);
+            onCompleteRef.current?.();
+            onOpenChangeRef.current(false);
           }
         }
       );
@@ -247,7 +222,7 @@ export function RetranscribeDialog({
     return () => {
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [open, meetingId, onComplete, onOpenChange]);
+  }, [open, meetingId]);
 
   const handleStartRetranscription = async () => {
     if (!meetingFolderPath) {
@@ -260,11 +235,10 @@ export function RetranscribeDialog({
     setProgress(null);
 
     try {
-      const selectedModelDetails = getSelectedModel();
       await invoke('start_retranscription_command', {
         meetingId,
         meetingFolderPath,
-        language: selectedLang === 'auto' ? null : selectedLang,
+        language: isParakeetModel ? null : selectedLang === 'auto' ? null : selectedLang,
         model: selectedModelDetails?.name || null,
         provider: selectedModelDetails?.provider || null,
       });
@@ -349,27 +323,39 @@ export function RetranscribeDialog({
 
         <div className="space-y-4 py-4">
           {!isProcessing && !error && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Globe className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Language</span>
+            !isParakeetModel ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Language</span>
+                </div>
+                <Select value={selectedLang} onValueChange={setSelectedLang}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select language" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-60">
+                    {LANGUAGES.map((lang) => (
+                      <SelectItem key={lang.code} value={lang.code}>
+                        {lang.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Select a specific language to improve accuracy, or use auto-detect
+                </p>
               </div>
-              <Select value={selectedLang} onValueChange={setSelectedLang}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select language" />
-                </SelectTrigger>
-                <SelectContent className="max-h-60">
-                  {LANGUAGES.map((lang) => (
-                    <SelectItem key={lang.code} value={lang.code}>
-                      {lang.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Select a specific language to improve accuracy, or use auto-detect
-              </p>
-            </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Language</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Language selection isn't supported for Parakeet. It always uses automatic detection.
+                </p>
+              </div>
+            )
           )}
 
           {!isProcessing && !error && availableModels.length > 0 && (
