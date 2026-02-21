@@ -175,6 +175,7 @@ export function RetranscribeDialog({
     if (!open) return;
 
     const unlisteners: UnlistenFn[] = [];
+    const cleanedUpRef = { current: false };
 
     const setupListeners = async () => {
       // Progress events
@@ -186,6 +187,10 @@ export function RetranscribeDialog({
           }
         }
       );
+      if (cleanedUpRef.current) {
+        unlistenProgress();
+        return;
+      }
       unlisteners.push(unlistenProgress);
 
       // Completion event
@@ -202,6 +207,11 @@ export function RetranscribeDialog({
           }
         }
       );
+      if (cleanedUpRef.current) {
+        unlistenComplete();
+        unlisteners.forEach(u => u());
+        return;
+      }
       unlisteners.push(unlistenComplete);
 
       // Error event
@@ -214,12 +224,18 @@ export function RetranscribeDialog({
           }
         }
       );
+      if (cleanedUpRef.current) {
+        unlistenError();
+        unlisteners.forEach(u => u());
+        return;
+      }
       unlisteners.push(unlistenError);
     };
 
     setupListeners();
 
     return () => {
+      cleanedUpRef.current = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, [open, meetingId]);
@@ -244,7 +260,8 @@ export function RetranscribeDialog({
       });
     } catch (err: any) {
       setIsProcessing(false);
-      setError(err.message || 'Failed to start retranscription');
+      const errorMsg = typeof err === 'string' ? err : (err?.message || String(err));
+      setError(errorMsg);
     }
   };
 

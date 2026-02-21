@@ -20,6 +20,29 @@ static RETRANSCRIPTION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 /// Global flag to signal cancellation
 static RETRANSCRIPTION_CANCELLED: AtomicBool = AtomicBool::new(false);
 
+/// RAII guard for RETRANSCRIPTION_IN_PROGRESS flag
+/// Ensures flag is cleared even if retranscription panics or returns early
+struct RetranscriptionGuard;
+
+impl RetranscriptionGuard {
+    /// Create guard and set flag atomically
+    fn acquire() -> Result<Self, String> {
+        if RETRANSCRIPTION_IN_PROGRESS
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err("Retranscription already in progress".to_string());
+        }
+        Ok(RetranscriptionGuard)
+    }
+}
+
+impl Drop for RetranscriptionGuard {
+    fn drop(&mut self) {
+        RETRANSCRIPTION_IN_PROGRESS.store(false, Ordering::SeqCst);
+    }
+}
+
 /// VAD redemption time in milliseconds - bridges natural pauses in speech
 /// Batch processing needs longer redemption (2000ms) than live pipeline (400ms)
 /// because the entire file is processed at once by VAD, and 400ms fragments
@@ -70,14 +93,16 @@ pub async fn start_retranscription<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<RetranscriptionResult> {
-    // Flag is already set atomically by start_retranscription_command via compare_exchange.
+    // Acquire guard - ensures flag is cleared even on panic/early return
+    let _guard = RetranscriptionGuard::acquire().map_err(|e| anyhow!(e))?;
+
     // Reset cancellation flag
     RETRANSCRIPTION_CANCELLED.store(false, Ordering::SeqCst);
 
     let result = run_retranscription(app.clone(), meeting_id.clone(), meeting_folder_path, language, model, provider).await;
 
-    // Clear in-progress flag
-    RETRANSCRIPTION_IN_PROGRESS.store(false, Ordering::SeqCst);
+    // Guard will automatically clear flag on drop
+    // No need for manual: RETRANSCRIPTION_IN_PROGRESS.store(false, Ordering::SeqCst);
 
     match &result {
         Ok(res) => {
@@ -505,7 +530,7 @@ async fn get_or_init_whisper<R: Runtime>(
     use crate::whisper_engine::commands::WHISPER_ENGINE;
 
     let engine = {
-        let guard = WHISPER_ENGINE.lock().unwrap();
+        let guard = WHISPER_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
         guard.as_ref().cloned()
     };
 
@@ -607,7 +632,7 @@ async fn get_or_init_parakeet<R: Runtime>(
     use crate::parakeet_engine::commands::PARAKEET_ENGINE;
 
     let engine = {
-        let guard = PARAKEET_ENGINE.lock().unwrap();
+        let guard = PARAKEET_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
         guard.as_ref().cloned()
     };
 
@@ -761,15 +786,15 @@ pub async fn start_retranscription_command<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<RetranscriptionStarted, String> {
-    // Atomically check and set the flag to prevent TOCTOU race
-    if RETRANSCRIPTION_IN_PROGRESS.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    // Check if retranscription is already in progress (guard will be acquired in start_retranscription)
+    if RETRANSCRIPTION_IN_PROGRESS.load(Ordering::SeqCst) {
         return Err("Retranscription already in progress".to_string());
     }
 
     // Clone values for the spawned task
     let meeting_id_clone = meeting_id.clone();
 
-    // Spawn the retranscription in a background task (flag already set above)
+    // Spawn the retranscription in a background task
     tauri::async_runtime::spawn(async move {
         let result = start_retranscription(
             app,

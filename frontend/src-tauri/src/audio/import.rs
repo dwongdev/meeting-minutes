@@ -26,6 +26,29 @@ static IMPORT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 /// Global flag to signal cancellation
 static IMPORT_CANCELLED: AtomicBool = AtomicBool::new(false);
 
+/// RAII guard for IMPORT_IN_PROGRESS flag
+/// Ensures flag is cleared even if import panics or returns early
+struct ImportGuard;
+
+impl ImportGuard {
+    /// Create guard and set flag atomically
+    fn acquire() -> Result<Self, String> {
+        if IMPORT_IN_PROGRESS
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err("Import already in progress".to_string());
+        }
+        Ok(ImportGuard)
+    }
+}
+
+impl Drop for ImportGuard {
+    fn drop(&mut self) {
+        IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
+    }
+}
+
 /// VAD redemption time in milliseconds - bridges natural pauses in speech
 /// Batch processing needs longer redemption (2000ms) than live pipeline (400ms)
 /// because the entire file is processed at once by VAD, and 400ms fragments
@@ -34,6 +57,9 @@ const VAD_REDEMPTION_TIME_MS: u32 = 2000;
 
 /// Supported audio file extensions
 const AUDIO_EXTENSIONS: &[&str] = &["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac", "mkv", "webm", "wma"];
+
+/// Maximum file size: 4GB (prevents OOM and excessive processing time)
+const MAX_FILE_SIZE_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 4GB
 
 /// Information about a selected audio file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +137,14 @@ pub fn validate_audio_file(path: &Path) -> Result<AudioFileInfo> {
     let metadata = std::fs::metadata(path)
         .map_err(|e| anyhow!("Cannot read file: {}", e))?;
     let size_bytes = metadata.len();
+
+    // Check file size limit
+    if size_bytes > MAX_FILE_SIZE_BYTES {
+        return Err(anyhow!(
+            "File too large: {:.2}GB. Maximum supported size is 4GB",
+            size_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+        ));
+    }
 
     // Get filename without extension for title
     let filename = path
@@ -218,7 +252,9 @@ pub async fn start_import<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<ImportResult> {
-    // Flag is already set atomically by start_import_audio_command via compare_exchange.
+    // Acquire guard - ensures flag is cleared even on panic/early return
+    let _guard = ImportGuard::acquire().map_err(|e| anyhow!(e))?;
+
     // Reset cancellation flag
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
@@ -232,8 +268,8 @@ pub async fn start_import<R: Runtime>(
     )
     .await;
 
-    // Clear in-progress flag
-    IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
+    // Guard will automatically clear flag on drop
+    // No need for manual: IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
 
     match &result {
         Ok(res) => {
@@ -699,7 +735,7 @@ async fn get_or_init_whisper<R: Runtime>(
     use crate::whisper_engine::commands::WHISPER_ENGINE;
 
     let engine = {
-        let guard = WHISPER_ENGINE.lock().unwrap();
+        let guard = WHISPER_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
         guard.as_ref().cloned()
     };
 
@@ -745,7 +781,7 @@ async fn get_or_init_parakeet<R: Runtime>(
     use crate::parakeet_engine::commands::PARAKEET_ENGINE;
 
     let engine = {
-        let guard = PARAKEET_ENGINE.lock().unwrap();
+        let guard = PARAKEET_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
         guard.as_ref().cloned()
     };
 
@@ -864,11 +900,17 @@ pub async fn select_and_validate_audio_command<R: Runtime>(
 ) -> Result<Option<AudioFileInfo>, String> {
     info!("Opening file dialog for audio import");
 
-    let file_path = app
-        .dialog()
-        .file()
-        .add_filter("Audio Files", &AUDIO_EXTENSIONS.iter().map(|s| *s).collect::<Vec<_>>())
-        .blocking_pick_file();
+    // Use spawn_blocking to avoid blocking async runtime
+    let app_clone = app.clone();
+    let file_path = tokio::task::spawn_blocking(move || {
+        app_clone
+            .dialog()
+            .file()
+            .add_filter("Audio Files", &AUDIO_EXTENSIONS.iter().map(|s| *s).collect::<Vec<_>>())
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("File dialog task failed: {}", e))?;
 
     match file_path {
         Some(path) => {
@@ -907,11 +949,12 @@ pub async fn start_import_audio_command<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<ImportStarted, String> {
-    if IMPORT_IN_PROGRESS.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    // Check if import is already in progress (guard will be acquired in start_import)
+    if IMPORT_IN_PROGRESS.load(Ordering::SeqCst) {
         return Err("Import already in progress".to_string());
     }
 
-    // Spawn import in background (flag already set atomically above)
+    // Spawn import in background
     tauri::async_runtime::spawn(async move {
         let result = start_import(app, source_path, title, language, model, provider).await;
 

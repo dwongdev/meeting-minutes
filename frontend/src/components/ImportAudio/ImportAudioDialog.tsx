@@ -92,6 +92,7 @@ export function ImportAudioDialog({
   const [selectedModelKey, setSelectedModelKey] = useState<string>('');
   const [loadingModels, setLoadingModels] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [titleModifiedByUser, setTitleModifiedByUser] = useState(false);
 
   const handleImportComplete = useCallback((result: ImportResult) => {
     toast.success(`Import complete! ${result.segments_count} segments created.`);
@@ -129,6 +130,7 @@ export function ImportAudioDialog({
     if (open) {
       reset();
       setTitle('');
+      setTitleModifiedByUser(false);
       setSelectedLang(selectedLanguage || 'auto');
       setShowAdvanced(false);
 
@@ -203,10 +205,10 @@ export function ImportAudioDialog({
 
   // Update title when fileInfo changes
   useEffect(() => {
-    if (fileInfo && !title) {
+    if (fileInfo && !title && !titleModifiedByUser) {
       setTitle(fileInfo.filename);
     }
-  }, [fileInfo, title]);
+  }, [fileInfo, title, titleModifiedByUser]);
 
   const getSelectedModel = (): ModelOption | undefined => {
     if (!selectedModelKey) return undefined;
@@ -339,7 +341,10 @@ export function ImportAudioDialog({
                     <label className="text-sm font-medium text-gray-700">Meeting Title</label>
                     <Input
                       value={title}
-                      onChange={(e) => setTitle(e.target.value)}
+                      onChange={(e) => {
+                        setTitle(e.target.value);
+                        setTitleModifiedByUser(true);
+                      }}
                       placeholder="Enter meeting title"
                     />
                   </div>

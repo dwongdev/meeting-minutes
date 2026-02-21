@@ -75,6 +75,7 @@ export function useImportAudio({
   // Set up event listeners (registered once, use refs for callbacks)
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
+    const cleanedUpRef = { current: false };
 
     const setupListeners = async () => {
       // Progress events
@@ -86,6 +87,10 @@ export function useImportAudio({
           setStatus('processing');
         }
       );
+      if (cleanedUpRef.current) {
+        unlistenProgress();
+        return;
+      }
       unlisteners.push(unlistenProgress);
 
       // Completion event
@@ -98,6 +103,11 @@ export function useImportAudio({
           onCompleteRef.current?.(event.payload);
         }
       );
+      if (cleanedUpRef.current) {
+        unlistenComplete();
+        unlisteners.forEach(u => u());
+        return;
+      }
       unlisteners.push(unlistenComplete);
 
       // Error event
@@ -110,12 +120,18 @@ export function useImportAudio({
           onErrorRef.current?.(event.payload.error);
         }
       );
+      if (cleanedUpRef.current) {
+        unlistenError();
+        unlisteners.forEach(u => u());
+        return;
+      }
       unlisteners.push(unlistenError);
     };
 
     setupListeners();
 
     return () => {
+      cleanedUpRef.current = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, []);
@@ -138,7 +154,7 @@ export function useImportAudio({
       }
     } catch (err: any) {
       setStatus('error');
-      const errorMsg = err.message || err || 'Failed to validate file';
+      const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || 'Failed to validate file');
       setError(errorMsg);
       onErrorRef.current?.(errorMsg);
       return null;
@@ -157,7 +173,7 @@ export function useImportAudio({
       return result;
     } catch (err: any) {
       setStatus('error');
-      const errorMsg = err.message || err || 'Failed to validate file';
+      const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || 'Failed to validate file');
       setError(errorMsg);
       onErrorRef.current?.(errorMsg);
       return null;
@@ -188,7 +204,7 @@ export function useImportAudio({
         });
       } catch (err: any) {
         setStatus('error');
-        const errorMsg = err.message || err || 'Failed to start import';
+        const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || 'Failed to start import');
         setError(errorMsg);
         onErrorRef.current?.(errorMsg);
       }

@@ -123,18 +123,28 @@ export default function RootLayout({
     if (showOnboarding) return; // Don't handle drops during onboarding
 
     const unlisteners: UnlistenFn[] = [];
+    const cleanedUpRef = { current: false };
 
     const setupListeners = async () => {
       // Drag enter/over - show overlay
       const unlistenDragEnter = await listen('tauri://drag-enter', () => {
         setShowDropOverlay(true);
       });
+      if (cleanedUpRef.current) {
+        unlistenDragEnter();
+        return;
+      }
       unlisteners.push(unlistenDragEnter);
 
       // Drag leave - hide overlay
       const unlistenDragLeave = await listen('tauri://drag-leave', () => {
         setShowDropOverlay(false);
       });
+      if (cleanedUpRef.current) {
+        unlistenDragLeave();
+        unlisteners.forEach(u => u());
+        return;
+      }
       unlisteners.push(unlistenDragLeave);
 
       // Drop - process files
@@ -142,12 +152,18 @@ export default function RootLayout({
         setShowDropOverlay(false);
         handleFileDrop(event.payload.paths);
       });
+      if (cleanedUpRef.current) {
+        unlistenDrop();
+        unlisteners.forEach(u => u());
+        return;
+      }
       unlisteners.push(unlistenDrop);
     };
 
     setupListeners();
 
     return () => {
+      cleanedUpRef.current = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, [showOnboarding, handleFileDrop]);
