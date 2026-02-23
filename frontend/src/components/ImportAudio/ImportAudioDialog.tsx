@@ -30,26 +30,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select';
-import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useImportAudio, AudioFileInfo, ImportResult } from '@/hooks/useImportAudio';
 import { useRouter } from 'next/navigation';
 import { useSidebar } from '../Sidebar/SidebarProvider';
 import { LANGUAGES } from '@/constants/languages';
-
-interface RawModelInfo {
-  name: string;
-  size_mb: number;
-  status: 'Available' | 'Missing' | { Downloading: { progress: number } } | { Error: string };
-}
-
-interface ModelOption {
-  provider: 'whisper' | 'parakeet';
-  name: string;
-  displayName: string;
-  size_mb: number;
-}
+import { useTranscriptionModels, ModelOption } from '@/hooks/useTranscriptionModels';
 
 interface ImportAudioDialogProps {
   open: boolean;
@@ -88,11 +75,17 @@ export function ImportAudioDialog({
 
   const [title, setTitle] = useState('');
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || 'auto');
-  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
-  const [selectedModelKey, setSelectedModelKey] = useState<string>('');
-  const [loadingModels, setLoadingModels] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [titleModifiedByUser, setTitleModifiedByUser] = useState(false);
+
+  // Use centralized model fetching hook
+  const {
+    availableModels,
+    selectedModelKey,
+    setSelectedModelKey,
+    loadingModels,
+    fetchModels,
+  } = useTranscriptionModels(transcriptModelConfig);
 
   const handleImportComplete = useCallback((result: ImportResult) => {
     toast.success(`Import complete! ${result.segments_count} segments created.`);
@@ -143,62 +136,7 @@ export function ImportAudioDialog({
         });
       }
 
-      // Fetch available models
-      const fetchModels = async () => {
-        setLoadingModels(true);
-        const allModels: ModelOption[] = [];
-
-        try {
-          const whisperModels = await invoke<RawModelInfo[]>('whisper_get_available_models');
-          const availableWhisper = whisperModels
-            .filter((m) => m.status === 'Available')
-            .map((m) => ({
-              provider: 'whisper' as const,
-              name: m.name,
-              displayName: `Whisper: ${m.name}`,
-              size_mb: m.size_mb,
-            }));
-          allModels.push(...availableWhisper);
-        } catch (err) {
-          console.error('Failed to fetch Whisper models:', err);
-        }
-
-        try {
-          const parakeetModels = await invoke<RawModelInfo[]>('parakeet_get_available_models');
-          const availableParakeet = parakeetModels
-            .filter((m) => m.status === 'Available')
-            .map((m) => ({
-              provider: 'parakeet' as const,
-              name: m.name,
-              displayName: `Parakeet: ${m.name}`,
-              size_mb: m.size_mb,
-            }));
-          allModels.push(...availableParakeet);
-        } catch (err) {
-          console.error('Failed to fetch Parakeet models:', err);
-        }
-
-        setAvailableModels(allModels);
-
-        // Set default model
-        const configuredProvider = transcriptModelConfig?.provider || '';
-        const configuredModel = transcriptModelConfig?.model || '';
-
-        const configuredMatch = allModels.find(
-          (m) =>
-            (configuredProvider === 'localWhisper' && m.provider === 'whisper' && m.name === configuredModel) ||
-            (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel)
-        );
-
-        if (configuredMatch) {
-          setSelectedModelKey(`${configuredMatch.provider}:${configuredMatch.name}`);
-        } else if (allModels.length > 0) {
-          setSelectedModelKey(`${allModels[0].provider}:${allModels[0].name}`);
-        }
-
-        setLoadingModels(false);
-      };
-
+      // Fetch available models using centralized hook
       fetchModels();
     }
   }, [open, preselectedFile, selectedLanguage, transcriptModelConfig, reset, validateFile]);
