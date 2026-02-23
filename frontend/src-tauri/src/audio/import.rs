@@ -3,6 +3,7 @@
 use crate::api::TranscriptSegment;
 use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
 use crate::audio::vad::get_speech_chunks_with_progress;
+use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
@@ -18,6 +19,7 @@ use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
 use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
 
 /// Global flag to track if import is in progress
@@ -55,9 +57,6 @@ impl Drop for ImportGuard {
 /// speech at every natural sentence/topic pause (500ms-2s)
 const VAD_REDEMPTION_TIME_MS: u32 = 2000;
 
-/// Supported audio file extensions
-const AUDIO_EXTENSIONS: &[&str] = &["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac", "mkv", "webm", "wma"];
-
 /// Maximum file size: 4GB (prevents OOM and excessive processing time)
 const MAX_FILE_SIZE_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 4GB
 
@@ -92,6 +91,13 @@ pub struct ImportResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportError {
     pub error: String,
+}
+
+/// Warning emitted during import (non-fatal)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportWarning {
+    pub warning: String,
+    pub details: Option<String>,
 }
 
 /// Response when import is started
@@ -473,6 +479,18 @@ async fn run_import<R: Runtime>(
 
     if total_segments == 0 {
         warn!("No speech detected in audio");
+
+        // Emit warning to frontend
+        let _ = app.emit(
+            "import-warning",
+            ImportWarning {
+                warning: "No speech detected in audio file".to_string(),
+                details: Some(
+                    "The file was imported successfully, but VAD did not detect any speech. \
+                     The meeting was created but contains no transcripts.".to_string()
+                ),
+            },
+        );
         // Still create the meeting, just with no transcripts
     }
 
@@ -841,16 +859,16 @@ async fn get_configured_model<R: Runtime>(app: &AppHandle<R>, provider_type: &st
             } else {
                 // Return default model for the requested type
                 Ok(if provider_type == "parakeet" {
-                    "parakeet-tdt-0.6b-v3-int8".to_string()
+                    DEFAULT_PARAKEET_MODEL.to_string()
                 } else {
-                    "large-v3-turbo".to_string()
+                    DEFAULT_WHISPER_MODEL.to_string()
                 })
             }
         }
         None => Ok(if provider_type == "parakeet" {
-            "parakeet-tdt-0.6b-v3-int8".to_string()
+            DEFAULT_PARAKEET_MODEL.to_string()
         } else {
-            "large-v3-turbo".to_string()
+            DEFAULT_WHISPER_MODEL.to_string()
         }),
     }
 }

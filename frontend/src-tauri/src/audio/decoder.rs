@@ -115,12 +115,6 @@ impl DecodedAudio {
 /// spike of resampling the entire file at once while preserving anti-aliasing
 /// quality that is critical for downstream VAD accuracy.
 ///
-/// Falls back to the single-pass sinc resampler if chunking fails.
-#[allow(dead_code)]
-fn chunked_resample(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
-    chunked_resample_with_progress(input, from_rate, to_rate, None)
-}
-
 /// Chunked resampling with optional progress callback.
 ///
 /// Resamples `input` in parallel 60-second chunks via [`rayon`], then merges
@@ -231,18 +225,6 @@ fn chunked_resample_with_progress(
         output.len()
     );
     output
-}
-
-/// Thin wrapper around the sinc resampler that returns a `Result`.
-///
-/// Used by [`chunked_resample`] to detect per-chunk failures without panicking.
-#[allow(dead_code)]
-fn resample_audio_result(
-    input: &[f32],
-    from_rate: u32,
-    to_rate: u32,
-) -> anyhow::Result<Vec<f32>> {
-    resample(input, from_rate, to_rate)
 }
 
 /// Normalize audio samples to the valid range (-1.0 to 1.0)
@@ -653,7 +635,7 @@ mod tests {
     #[test]
     fn test_chunked_resample_same_rate() {
         let input = vec![0.1, 0.2, 0.3, 0.4, 0.5];
-        let result = chunked_resample(&input, 16000, 16000);
+        let result = chunked_resample_with_progress(&input, 16000, 16000, None);
         assert_eq!(result.len(), input.len());
         for (i, &sample) in result.iter().enumerate() {
             assert!((sample - input[i]).abs() < 0.001);
@@ -663,7 +645,7 @@ mod tests {
     #[test]
     fn test_chunked_resample_empty_input() {
         let input: Vec<f32> = vec![];
-        let result = chunked_resample(&input, 48000, 16000);
+        let result = chunked_resample_with_progress(&input, 48000, 16000, None);
         assert!(result.is_empty());
     }
 
@@ -671,7 +653,7 @@ mod tests {
     fn test_chunked_resample_downsamples_correctly() {
         // 48kHz to 16kHz = 3x downsampling with a 2-second signal
         let input: Vec<f32> = (0..96000).map(|i| (i as f32 / 96000.0)).collect();
-        let result = chunked_resample(&input, 48000, 16000);
+        let result = chunked_resample_with_progress(&input, 48000, 16000, None);
 
         // Output should be approximately 1/3 the length
         let expected_len = 96000.0 * (16000.0 / 48000.0);
@@ -689,7 +671,7 @@ mod tests {
         let input: Vec<f32> = (0..44100)
             .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin())
             .collect();
-        let result = chunked_resample(&input, 44100, 16000);
+        let result = chunked_resample_with_progress(&input, 44100, 16000, None);
 
         for sample in &result {
             assert!(
@@ -708,7 +690,7 @@ mod tests {
             .collect();
 
         let single_pass = resample_audio(&input, 48000, 16000);
-        let chunked = chunked_resample(&input, 48000, 16000);
+        let chunked = chunked_resample_with_progress(&input, 48000, 16000, None);
 
         // Lengths should be very close
         let len_diff = (single_pass.len() as i64 - chunked.len() as i64).unsigned_abs();

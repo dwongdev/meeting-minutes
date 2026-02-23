@@ -42,6 +42,9 @@ pub mod transcription;
 // Shared utilities for import and retranscription
 pub(crate) mod common;
 
+// Shared constants
+pub mod constants;
+
 // Retranscription module (re-process stored audio with different settings)
 pub mod retranscription;
 
@@ -112,4 +115,7 @@ pub use vad::{extract_speech_16k};
 
 // Export decoder for retranscription
 pub use decoder::{decode_audio_file, DecodedAudio};
+
+// Export audio constants
+pub use constants::AUDIO_EXTENSIONS;
 

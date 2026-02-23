@@ -635,7 +635,7 @@ pub async fn api_get_transcript_config<R: Runtime>(
             log_info!("No transcript config found, returning default.");
             Ok(Some(TranscriptConfig {
                 provider: "parakeet".to_string(),
-                model: "parakeet-tdt-0.6b-v3-int8".to_string(),
+                model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
                 api_key: None,
             }))
         }

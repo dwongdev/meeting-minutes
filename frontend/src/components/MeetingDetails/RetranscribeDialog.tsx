@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { RefreshCw, Globe, Loader2, AlertCircle, CheckCircle2, X, Cpu } from 'lucide-react';
 import {
   Dialog,
@@ -84,14 +84,12 @@ export function RetranscribeDialog({
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
   useEffect(() => { onOpenChangeRef.current = onOpenChange; }, [onOpenChange]);
 
-  // Helper to get selected model details
-  const getSelectedModel = (): ModelOption | undefined => {
+  // Helper to get selected model details (memoized)
+  const selectedModelDetails = useMemo((): ModelOption | undefined => {
     if (!selectedModelKey) return undefined;
     const [provider, name] = selectedModelKey.split(':');
     return availableModels.find(m => m.provider === provider && m.name === name);
-  };
-
-  const selectedModelDetails = getSelectedModel();
+  }, [selectedModelKey, availableModels]);
   const isParakeetModel = selectedModelDetails?.provider === 'parakeet';
 
   useEffect(() => {
@@ -297,10 +295,6 @@ export function RetranscribeDialog({
     if (isProcessing) {
       event.preventDefault();
     }
-  };
-
-  const getLanguageName = (code: string) => {
-    return LANGUAGES.find((l) => l.code === code)?.name || code;
   };
 
   return (

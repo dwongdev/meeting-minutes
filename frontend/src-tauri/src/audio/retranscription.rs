@@ -3,6 +3,8 @@
 use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
 use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::constants::AUDIO_EXTENSIONS;
+use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
@@ -129,9 +131,6 @@ pub async fn start_retranscription<R: Runtime>(
 
     result
 }
-
-/// Supported audio extensions for file discovery
-const AUDIO_EXTENSIONS: &[&str] = &["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac", "mkv", "webm", "wma"];
 
 /// Find audio file in meeting folder
 /// Tries common names first, then scans for any file with an audio extension
@@ -617,9 +616,9 @@ async fn get_configured_whisper_model<R: Runtime>(app: &AppHandle<R>) -> Result<
             }
         },
         None => {
-            // Default to large-v3-turbo if no config exists
-            warn!("No transcript config found, using default model 'large-v3-turbo'");
-            Ok("large-v3-turbo".to_string())
+            // Default to configured Whisper model if no config exists
+            warn!("No transcript config found, using default model '{}'", DEFAULT_WHISPER_MODEL);
+            Ok(DEFAULT_WHISPER_MODEL.to_string())
         }
     }
 }
@@ -711,15 +710,15 @@ async fn get_configured_parakeet_model<R: Runtime>(app: &AppHandle<R>) -> Result
             if provider == "parakeet" {
                 Ok(model)
             } else {
-                // Default to parakeet-tdt model
+                // Default to configured Parakeet model
                 warn!("Configured provider is not Parakeet, using default model");
-                Ok("parakeet-tdt-0.6b-v3-int8".to_string())
+                Ok(DEFAULT_PARAKEET_MODEL.to_string())
             }
         },
         None => {
-            // Default to parakeet-tdt model if no config exists
+            // Default to configured Parakeet model if no config exists
             warn!("No transcript config found, using default Parakeet model");
-            Ok("parakeet-tdt-0.6b-v3-int8".to_string())
+            Ok(DEFAULT_PARAKEET_MODEL.to_string())
         }
     }
 }

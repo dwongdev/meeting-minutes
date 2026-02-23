@@ -23,6 +23,7 @@ import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
+import { AUDIO_EXTENSIONS, isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 
 const sourceSans3 = Source_Sans_3({
   subsets: ['latin'],
@@ -31,9 +32,6 @@ const sourceSans3 = Source_Sans_3({
 })
 
 // export { metadata } from './metadata'
-
-// Audio file extensions for drag-drop filtering
-const AUDIO_EXTENSIONS = ['mp4', 'm4a', 'wav', 'mp3', 'flac', 'ogg', 'aac', 'mkv', 'webm', 'wma'];
 
 export default function RootLayout({
   children,
@@ -104,7 +102,7 @@ export default function RootLayout({
     // Find the first audio file
     const audioFile = paths.find(p => {
       const ext = p.split('.').pop()?.toLowerCase();
-      return ext && AUDIO_EXTENSIONS.includes(ext);
+      return !!ext && isAudioExtension(ext);
     });
 
     if (audioFile) {
@@ -113,10 +111,10 @@ export default function RootLayout({
       setShowImportDialog(true);
     } else if (paths.length > 0) {
       toast.error('Please drop an audio file', {
-        description: 'Supported formats: MP4, WAV, MP3, FLAC, OGG, MKV, WebM, WMA'
+        description: `Supported formats: ${getAudioFormatsDisplayList()}`
       });
     }
-  }, []);
+  }, [isAudioExtension]);
 
   // Listen for drag-drop events
   useEffect(() => {

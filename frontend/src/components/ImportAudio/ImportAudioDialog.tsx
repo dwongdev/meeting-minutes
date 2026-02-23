@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Upload,
   Globe,
@@ -210,13 +210,11 @@ export function ImportAudioDialog({
     }
   }, [fileInfo, title, titleModifiedByUser]);
 
-  const getSelectedModel = (): ModelOption | undefined => {
+  const selectedModel = useMemo((): ModelOption | undefined => {
     if (!selectedModelKey) return undefined;
     const [provider, name] = selectedModelKey.split(':');
     return availableModels.find((m) => m.provider === provider && m.name === name);
-  };
-
-  const selectedModel = getSelectedModel();
+  }, [selectedModelKey, availableModels]);
   const isParakeetModel = selectedModel?.provider === 'parakeet';
 
   useEffect(() => {

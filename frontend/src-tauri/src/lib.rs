@@ -38,6 +38,7 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod config;
 pub mod console_utils;
 pub mod database;
 pub mod notifications;
