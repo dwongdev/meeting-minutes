@@ -70,6 +70,15 @@ interface ConfigContextType {
   isAutoSummary: boolean;
   toggleIsAutoSummary: (checked: boolean) => void;
 
+  // Provider-specific API keys
+  providerApiKeys: {
+    claude: string | null;
+    groq: string | null;
+    openai: string | null;
+    openrouter: string | null;
+  };
+  updateProviderApiKey: (provider: string, apiKey: string | null) => void;
+
   // Preference settings (lazy loaded)
   notificationSettings: NotificationSettings | null;
   storageLocations: StorageLocations | null;
@@ -86,7 +95,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'ollama',
     model: 'llama3.2:latest',
-    whisperModel: 'large-v3'
+    whisperModel: 'large-v3',
+    ollamaEndpoint: null
   });
 
   // Transcript model configuration state
@@ -94,6 +104,20 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     provider: 'parakeet',
     model: 'parakeet-tdt-0.6b-v3-int8',
     apiKey: null
+  });
+
+  // Provider-specific API keys (loaded once at startup)
+  // Note: Gemini omitted for now - add when UI support is added
+  const [providerApiKeys, setProviderApiKeys] = useState<{
+    claude: string | null;
+    groq: string | null;
+    openai: string | null;
+    openrouter: string | null;
+  }>({
+    claude: null,
+    groq: null,
+    openai: null,
+    openrouter: null,
   });
 
   // Ollama models list and error state
@@ -134,60 +158,21 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const preferencesLoadedRef = useRef(false);
   const isLoadingRef = useRef(false);
 
-  // Format size helper function for Ollama models
-  const formatSize = (size: number): string => {
-    if (size < 1024) {
-      return `${size} B`;
-    } else if (size < 1024 * 1024) {
-      return `${(size / 1024).toFixed(1)} KB`;
-    } else if (size < 1024 * 1024 * 1024) {
-      return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-    } else {
-      return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-    }
-  };
-
-  // Load Ollama models on mount
+  // Load Ollama models (uses saved endpoint, re-runs when endpoint changes after config load)
   useEffect(() => {
     const loadModels = async () => {
       try {
-        const response = await fetch('http://localhost:11434/api/tags', {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const modelList = data.models.map((model: any) => ({
-          name: model.name,
-          id: model.model,
-          size: formatSize(model.size),
-          modified: model.modified_at
-        }));
+        const endpoint = modelConfig.ollamaEndpoint || null;
+        const modelList = await invoke<OllamaModel[]>('get_ollama_models', { endpoint });
         setModels(modelList);
+        setError('');
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load Ollama models');
         console.error('Error loading models:', err);
       }
     };
-
     loadModels();
-  }, []);
-
-  // Auto-select first Ollama model when models load
-  useEffect(() => {
-    if (models.length > 0 && modelConfig.provider === 'ollama') {
-      setModelConfig(prev => ({
-        ...prev,
-        model: models[0].name
-      }));
-    }
-  }, [models, modelConfig.provider]);
+  }, [modelConfig.ollamaEndpoint]);
 
   // Load transcript configuration on mount
   useEffect(() => {
@@ -225,10 +210,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
                   endpoint: customConfig.endpoint,
                   model: customConfig.model,
                 });
+                const resolvedModel = customConfig.model || data.model || '';
                 setModelConfig(prev => ({
                   ...prev,
                   provider: data.provider,
-                  model: customConfig.model || data.model || prev.model,
+                  model: resolvedModel || prev.model,
                   whisperModel: data.whisperModel || prev.whisperModel,
                   customOpenAIEndpoint: customConfig.endpoint,
                   customOpenAIModel: customConfig.model,
@@ -237,6 +223,14 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
                   temperature: customConfig.temperature,
                   topP: customConfig.topP,
                 }));
+
+                // Seed per-provider model cache from DB
+                if (resolvedModel) {
+                  const map = JSON.parse(localStorage.getItem('providerModelMap') || '{}');
+                  map[data.provider] = resolvedModel;
+                  localStorage.setItem('providerModelMap', JSON.stringify(map));
+                }
+
                 return; // Early return
               }
             } catch (err) {
@@ -250,13 +244,48 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             provider: data.provider,
             model: data.model || prev.model,
             whisperModel: data.whisperModel || prev.whisperModel,
+            ollamaEndpoint: data.ollamaEndpoint,
           }));
+
+          // Seed per-provider model cache from DB
+          if (data.model) {
+            const map = JSON.parse(localStorage.getItem('providerModelMap') || '{}');
+            map[data.provider] = data.model;
+            localStorage.setItem('providerModelMap', JSON.stringify(map));
+          }
         }
       } catch (error) {
         console.error('Failed to fetch saved model config in ConfigContext:', error);
       }
     };
     fetchModelConfig();
+  }, []);
+
+  // Load all provider API keys on mount
+  useEffect(() => {
+    const loadAllApiKeys = async () => {
+      try {
+        const providers = ['claude', 'groq', 'openai', 'openrouter'];
+        const keys = await Promise.all(
+          providers.map(p =>
+            invoke<string>('api_get_api_key', { provider: p })
+              .catch(() => null) // Gracefully handle missing keys
+          )
+        );
+
+        setProviderApiKeys({
+          claude: keys[0],
+          groq: keys[1],
+          openai: keys[2],
+          openrouter: keys[3],
+        });
+        console.log('[ConfigContext] Loaded provider API keys');
+      } catch (error) {
+        console.error('[ConfigContext] Failed to load provider API keys:', error);
+      }
+    };
+
+    loadAllApiKeys();
   }, []);
 
   // Listen for model config updates from other components
@@ -266,6 +295,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       const unlisten = await listen<ModelConfig>('model-config-updated', (event) => {
         console.log('[ConfigContext] Received model-config-updated event:', event.payload);
         setModelConfig(event.payload);
+
+        // Update provider-specific key when config changes
+        if (event.payload.apiKey && event.payload.provider !== 'custom-openai') {
+          updateProviderApiKey(event.payload.provider, event.payload.apiKey);
+        }
       });
       return unlisten;
     };
@@ -343,6 +377,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // Update individual provider API key
+  const updateProviderApiKey = useCallback((provider: string, apiKey: string | null) => {
+    setProviderApiKeys(prev => ({ ...prev, [provider]: apiKey }));
+  }, []);
+
   // Lazy load preference settings (only loads if not already cached)
   const loadPreferences = useCallback(async () => {
     // If already loaded, don't reload
@@ -408,6 +447,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     setModelConfig,
     isAutoSummary,
     toggleIsAutoSummary,
+    providerApiKeys,
+    updateProviderApiKey,
     transcriptModelConfig,
     setTranscriptModelConfig,
     selectedDevices,
@@ -428,6 +469,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     modelConfig,
     isAutoSummary,
     toggleIsAutoSummary,
+    providerApiKeys,
+    updateProviderApiKey,
     transcriptModelConfig,
     selectedDevices,
     selectedLanguage,

@@ -139,13 +139,19 @@ jobs:
         run: |
           echo "Building llama-helper sidecar with Metal support..."
           cargo build --release -p llama-helper --features metal
-          
+
           # Copy binary to binaries directory
           mkdir -p frontend/src-tauri/binaries
           cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-aarch64-apple-darwin
-          
+
           echo "Copied llama-helper to frontend/src-tauri/binaries/"
           ls -la frontend/src-tauri/binaries/
+
+      - name: Cache FFmpeg binary
+        uses: actions/cache@v4
+        with:
+          path: frontend/src-tauri/binaries/ffmpeg-*
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
 
       - name: Build Tauri app (with code signing)
         if: ${{ github.event.inputs.sign-build == 'true' }}

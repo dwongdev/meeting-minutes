@@ -55,19 +55,6 @@ export function ParakeetModelManager({
         const modelList = await ParakeetAPI.getAvailableModels();
         setModels(modelList);
 
-        // Auto-select first available model if none selected
-        if (!selectedModel) {
-          const recommendedModel = modelList.find(m =>
-            m.name === 'parakeet-tdt-0.6b-v3-int8' && m.status === 'Available'
-          );
-          const anyAvailable = modelList.find(m => m.status === 'Available');
-          const toSelect = recommendedModel || anyAvailable;
-
-          if (toSelect && onModelSelect) {
-            onModelSelect(toSelect.name);
-          }
-        }
-
         setInitialized(true);
       } catch (err) {
         console.error('Failed to initialize Parakeet:', err);

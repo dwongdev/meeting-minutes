@@ -12,6 +12,10 @@ export interface ModelConfig {
   provider: 'ollama' | 'groq' | 'claude' | 'openrouter' | 'openai' | 'builtin-ai' | 'custom-openai';
   model: string;
   whisperModel: string;
+  /**
+   * @deprecated Use providerApiKeys from ConfigContext instead.
+   * This field may contain stale data when provider changes without saving.
+   */
   apiKey?: string | null;
   ollamaEndpoint?: string | null;
   // Custom OpenAI fields (only populated when provider is 'custom-openai')
