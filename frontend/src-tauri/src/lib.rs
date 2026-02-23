@@ -38,6 +38,7 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod config;
 pub mod console_utils;
 pub mod database;
 pub mod notifications;
@@ -716,6 +717,16 @@ pub fn run() {
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,
+            // Retranscription commands
+            audio::retranscription::start_retranscription_command,
+            audio::retranscription::cancel_retranscription_command,
+            audio::retranscription::is_retranscription_in_progress_command,
+            // Import audio commands
+            audio::import::select_and_validate_audio_command,
+            audio::import::validate_audio_file_command,
+            audio::import::start_import_audio_command,
+            audio::import::cancel_import_command,
+            audio::import::is_import_in_progress_command,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
