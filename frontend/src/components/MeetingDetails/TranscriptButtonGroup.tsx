@@ -69,15 +69,15 @@ export function TranscriptButtonGroup({
           <Button
             size="sm"
             variant="outline"
-            className="xl:px-4"
+            className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-blue-200 xl:px-4"
             onClick={() => {
-              Analytics.trackButtonClick('retranscribe', 'meeting_details');
+              Analytics.trackButtonClick('enhance_transcript', 'meeting_details');
               setShowRetranscribeDialog(true);
             }}
-            title="Retranscribe with different language"
+            title="Retranscribe to enhance your recorded audio"
           >
             <RefreshCw className="xl:mr-2" size={18} />
-            <span className="hidden lg:inline">Retranscribe</span>
+            <span className="hidden lg:inline">Enhance</span>
           </Button>
         )}
       </ButtonGroup>
