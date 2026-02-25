@@ -24,21 +24,10 @@ export interface BetaFeatures {
   importAndRetranscribe: boolean;
 }
 
-/**
- * Default values for all beta features
- * New features should default to FALSE unless there's a specific reason
- */
 export const DEFAULT_BETA_FEATURES: BetaFeatures = {
   importAndRetranscribe: true, // Default: enabled
 };
 
-/**
- * Mapping of feature keys to analytics event names
- * Used for tracking feature toggle events
- */
-export const BETA_FEATURE_ANALYTICS_MAP: Record<keyof BetaFeatures, string> = {
-  importAndRetranscribe: 'import_audio,retranscription',
-};
 
 /**
  * Human-readable feature names for UI display

@@ -66,7 +66,6 @@ interface ConfigContextType {
   // Beta features
   betaFeatures: BetaFeatures;
   toggleBetaFeature: (featureKey: BetaFeatureKey, enabled: boolean) => void;
-  isBetaFeatureEnabled: (featureKey: BetaFeatureKey) => boolean;
 
   // Ollama models
   models: OllamaModel[];
@@ -405,11 +404,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Helper function for checking if a beta feature is enabled
-  const isBetaFeatureEnabled = useCallback((featureKey: BetaFeatureKey): boolean => {
-    return betaFeatures[featureKey];
-  }, [betaFeatures]);
-
   // Update individual provider API key
   const updateProviderApiKey = useCallback((provider: string, apiKey: string | null) => {
     setProviderApiKeys(prev => ({ ...prev, [provider]: apiKey }));
@@ -492,7 +486,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     toggleConfidenceIndicator,
     betaFeatures,
     toggleBetaFeature,
-    isBetaFeatureEnabled,
     models,
     modelOptions,
     error,
@@ -514,7 +507,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     toggleConfidenceIndicator,
     betaFeatures,
     toggleBetaFeature,
-    isBetaFeatureEnabled,
     models,
     modelOptions,
     error,
