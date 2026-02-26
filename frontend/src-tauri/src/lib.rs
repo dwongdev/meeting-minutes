@@ -372,16 +372,6 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
     }
 }
 
-// Language preference commands
-#[tauri::command]
-async fn get_language_preference() -> Result<String, String> {
-    let language = LANGUAGE_PREFERENCE
-        .lock()
-        .map_err(|e| format!("Failed to get language preference: {}", e))?;
-    log_info!("Retrieved language preference: {}", &*language);
-    Ok(language.clone())
-}
-
 #[tauri::command]
 async fn set_language_preference(language: String) -> Result<(), String> {
     let mut lang_pref = LANGUAGE_PREFERENCE
@@ -669,7 +659,6 @@ pub fn run() {
             audio::recording_preferences::set_audio_backend,
             audio::recording_preferences::get_audio_backend_info,
             // Language preference commands
-            get_language_preference,
             set_language_preference,
             // Notification system commands
             notifications::commands::get_notification_settings,

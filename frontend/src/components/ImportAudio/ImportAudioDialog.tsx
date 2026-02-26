@@ -71,7 +71,7 @@ export function ImportAudioDialog({
 }: ImportAudioDialogProps) {
   const router = useRouter();
   const { refetchMeetings } = useSidebar();
-  const { selectedLanguage, transcriptModelConfig } = useConfig();
+  const { selectedLanguage, transcriptModelConfig, betaFeatures } = useConfig();
 
   const [title, setTitle] = useState('');
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || 'auto');
@@ -207,6 +207,11 @@ export function ImportAudioDialog({
       event.preventDefault();
     }
   };
+
+  // Gate: Don't render dialog if beta feature is disabled (defense in depth)
+  if (!betaFeatures.importAndRetranscribe) {
+    return null;
+  }
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>

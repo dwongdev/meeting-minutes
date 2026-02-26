@@ -452,13 +452,6 @@ async fn run_retranscription<R: Runtime>(
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
     }
 
-    sqlx::query("UPDATE meetings SET transcription_language = ? WHERE id = ?")
-        .bind(language.as_deref())
-        .bind(&meeting_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to update meeting language: {}", e))?;
-
     tx.commit().await
         .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
 
@@ -776,6 +769,7 @@ pub struct RetranscriptionStarted {
     pub message: String,
 }
 
+// Start retranscription (Beta gated using configContext.betaFeatures)
 #[tauri::command]
 pub async fn start_retranscription_command<R: Runtime>(
     app: AppHandle<R>,
@@ -785,6 +779,7 @@ pub async fn start_retranscription_command<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<RetranscriptionStarted, String> {
+
     // Check if retranscription is already in progress (guard will be acquired in start_retranscription)
     if RETRANSCRIPTION_IN_PROGRESS.load(Ordering::SeqCst) {
         return Err("Retranscription already in progress".to_string());

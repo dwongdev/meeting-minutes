@@ -27,6 +27,7 @@ interface TranscriptPanelProps {
   // Retranscription props
   meetingId?: string;
   meetingFolderPath?: string | null;
+  onRefetchTranscripts?: () => Promise<void>;
 }
 
 export function TranscriptPanel({
@@ -46,6 +47,7 @@ export function TranscriptPanel({
   onLoadMore,
   meetingId,
   meetingFolderPath,
+  onRefetchTranscripts,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
@@ -72,6 +74,7 @@ export function TranscriptPanel({
           onOpenMeetingFolder={onOpenMeetingFolder}
           meetingId={meetingId}
           meetingFolderPath={meetingFolderPath}
+          onRefetchTranscripts={onRefetchTranscripts}
         />
       </div>
 

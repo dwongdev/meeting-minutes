@@ -44,6 +44,7 @@ function MeetingDetailsContent() {
     totalCount,
     loadedCount,
     loadMore,
+    refetch,
     error: transcriptError,
   } = usePaginatedTranscripts({ meetingId: meetingId || '' });
 
@@ -368,6 +369,7 @@ function MeetingDetailsContent() {
       // Refetch meetings list to update sidebar
       await refetchMeetings();
     }}
+    onRefetchTranscripts={refetch}
     // Pagination props for efficient transcript loading
     segments={segments}
     hasMore={hasMore}

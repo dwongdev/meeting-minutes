@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import Analytics from '@/lib/analytics';
 
 export interface AudioFileInfo {
   path: string;
@@ -96,8 +97,15 @@ export function useImportAudio({
       // Completion event
       const unlistenComplete = await listen<ImportResult>(
         'import-complete',
-        (event) => {
+        async (event) => {
           if (isCancelledRef.current) return;
+
+          await Analytics.track('import_audio_completed', {
+            success: 'true',
+            duration_seconds: event.payload.duration_seconds.toString(),
+            segments_count: event.payload.segments_count.toString()
+          });
+
           setStatus('complete');
           setProgress(null);
           onCompleteRef.current?.(event.payload);
@@ -113,8 +121,11 @@ export function useImportAudio({
       // Error event
       const unlistenError = await listen<ImportError>(
         'import-error',
-        (event) => {
+        async (event) => {
           if (isCancelledRef.current) return;
+
+          await Analytics.trackError('import_audio_failed', event.payload.error);
+
           setStatus('error');
           setError(event.payload.error);
           onErrorRef.current?.(event.payload.error);
@@ -195,6 +206,16 @@ export function useImportAudio({
       setProgress(null);
 
       try {
+        if (fileInfo) {
+          await Analytics.track('import_audio_started', {
+            file_size_bytes: fileInfo.size_bytes.toString(),
+            duration_seconds: fileInfo.duration_seconds.toString(),
+            language: language || 'auto',
+            model_provider: provider || '',
+            model_name: model || ''
+          });
+        }
+
         await invoke('start_import_audio_command', {
           sourcePath,
           title,
@@ -206,10 +227,13 @@ export function useImportAudio({
         setStatus('error');
         const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || 'Failed to start import');
         setError(errorMsg);
+
+        await Analytics.trackError('import_audio_failed', errorMsg);
+
         onErrorRef.current?.(errorMsg);
       }
     },
-    []
+    [fileInfo]
   );
 
   // Cancel ongoing import

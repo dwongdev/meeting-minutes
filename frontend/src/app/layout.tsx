@@ -18,6 +18,7 @@ import { TranscriptProvider } from '@/contexts/TranscriptContext'
 import { ConfigProvider } from '@/contexts/ConfigContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
 import { OnboardingFlow } from '@/components/onboarding'
+import { loadBetaFeatures } from '@/types/betaFeatures'
 import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
@@ -99,6 +100,16 @@ export default function RootLayout({
 
   // Handle file drop for audio import
   const handleFileDrop = useCallback((paths: string[]) => {
+    // Check if beta features are enabled (read from localStorage directly since we're outside ConfigProvider)
+    const betaFeatures = loadBetaFeatures();
+
+    if (!betaFeatures.importAndRetranscribe) {
+      toast.error('Beta feature disabled', {
+        description: 'Enable "Import Audio & Retranscribe" in Settings > Beta to use this feature.'
+      });
+      return;
+    }
+
     // Find the first audio file
     const audioFile = paths.find(p => {
       const ext = p.split('.').pop()?.toLowerCase();
