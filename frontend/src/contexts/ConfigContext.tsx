@@ -211,6 +211,19 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     loadTranscriptConfig();
   }, []);
 
+  // Sync language preference to Rust on mount (fixes startup desync bug)
+  useEffect(() => {
+    if (selectedLanguage) {
+      invoke('set_language_preference', { language: selectedLanguage })
+        .then(() => {
+          console.log('[ConfigContext] Synced language preference to Rust on startup:', selectedLanguage);
+        })
+        .catch(err => {
+          console.error('[ConfigContext] Failed to sync language preference to Rust on startup:', err);
+        });
+    }
+  }, []); 
+
   // Load model configuration on mount
   useEffect(() => {
     const fetchModelConfig = async () => {
