@@ -161,9 +161,9 @@ pub(crate) fn split_segment_at_silence(
             confidence: segment.confidence,
         });
 
-        // Advance position: if we used overlap, start next chunk at the split point
-        // (not at chunk_end) so the overlap region is transcribed by both chunks
-        pos = split_at;
+        // Advance position to where the current chunk actually ends
+        // to avoid transcribing the overlap region twice
+        pos = chunk_end;
     }
 
     result

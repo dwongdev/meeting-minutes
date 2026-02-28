@@ -91,6 +91,7 @@ export function ImportAudioDialog({
     setSelectedModelKey,
     loadingModels,
     fetchModels,
+    resetSelection,
   } = useTranscriptionModels(transcriptModelConfig);
 
   const handleImportComplete = useCallback((result: ImportResult) => {
@@ -133,6 +134,7 @@ export function ImportAudioDialog({
     // Only initialize when transitioning from closed (false) to open (true)
     if (open && !wasOpen) {
       reset();
+      resetSelection();
       setTitle('');
       setTitleModifiedByUser(false);
       setSelectedLang(selectedLanguage || 'auto');
@@ -150,7 +152,7 @@ export function ImportAudioDialog({
       // Fetch available models using centralized hook
       fetchModels();
     }
-  }, [open, preselectedFile, selectedLanguage, transcriptModelConfig, reset, validateFile, fetchModels]);
+  }, [open, preselectedFile, selectedLanguage, transcriptModelConfig, reset, resetSelection, validateFile, fetchModels]);
 
   // Update title when fileInfo changes
   useEffect(() => {
@@ -162,6 +164,7 @@ export function ImportAudioDialog({
   const selectedModel = useMemo((): ModelOption | undefined => {
     if (!selectedModelKey) return undefined;
     const colonIndex = selectedModelKey.indexOf(':');
+    if (colonIndex === -1) return undefined;
     const provider = selectedModelKey.slice(0, colonIndex);
     const name = selectedModelKey.slice(colonIndex + 1);
     return availableModels.find((m) => m.provider === provider && m.name === name);

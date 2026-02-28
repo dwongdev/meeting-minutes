@@ -71,6 +71,7 @@ export function RetranscribeDialog({
     setSelectedModelKey,
     loadingModels,
     fetchModels,
+    resetSelection,
   } = useTranscriptionModels(transcriptModelConfig);
 
   // Stable refs for callbacks to avoid listener re-registration
@@ -79,10 +80,14 @@ export function RetranscribeDialog({
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
   useEffect(() => { onOpenChangeRef.current = onOpenChange; }, [onOpenChange]);
 
+  // Track previous open state to only reset on closed→open transition
+  const prevOpenRef = useRef(false);
+
   // Helper to get selected model details (memoized)
   const selectedModelDetails = useMemo((): ModelOption | undefined => {
     if (!selectedModelKey) return undefined;
     const colonIndex = selectedModelKey.indexOf(':');
+    if (colonIndex === -1) return undefined;
     const provider = selectedModelKey.slice(0, colonIndex);
     const name = selectedModelKey.slice(colonIndex + 1);
     return availableModels.find(m => m.provider === provider && m.name === name);
@@ -95,9 +100,14 @@ export function RetranscribeDialog({
     }
   }, [isParakeetModel, selectedLang]);
 
-  // Reset state and fetch models when dialog opens
+  // Reset state only when dialog transitions from closed to open
+  // This prevents re-initialization when config changes while dialog is already open
   useEffect(() => {
-    if (open) {
+    const wasOpen = prevOpenRef.current;
+    prevOpenRef.current = open;
+
+    if (open && !wasOpen) {
+      resetSelection();
       setIsProcessing(false);
       setProgress(null);
       setError(null);
@@ -106,7 +116,7 @@ export function RetranscribeDialog({
       // Fetch available models using centralized hook
       fetchModels();
     }
-  }, [open, selectedLanguage, transcriptModelConfig]);
+  }, [open, selectedLanguage, transcriptModelConfig, fetchModels]);
 
   // Listen for retranscription events
   useEffect(() => {

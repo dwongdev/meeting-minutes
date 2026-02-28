@@ -164,9 +164,11 @@ export default function RootLayout({
     const cleanedUpRef = { current: false };
 
     const setupListeners = async () => {
-      // Drag enter/over - show overlay
+      // Drag enter/over - show overlay only if beta feature is enabled
       const unlistenDragEnter = await listen('tauri://drag-enter', () => {
-        setShowDropOverlay(true);
+        if (loadBetaFeatures().importAndRetranscribe) {
+          setShowDropOverlay(true);
+        }
       });
       if (cleanedUpRef.current) {
         unlistenDragEnter();

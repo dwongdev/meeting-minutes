@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
 export interface RawModelInfo {
@@ -32,6 +32,14 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [selectedModelKey, setSelectedModelKey] = useState<string>('');
   const [loadingModels, setLoadingModels] = useState(false);
+  // Track whether the user has manually changed the model selection
+  const userSelectedRef = useRef(false);
+
+  // Wrap setSelectedModelKey to track user-initiated changes
+  const setSelectedModelKeyWithTracking = useCallback((key: string) => {
+    userSelectedRef.current = true;
+    setSelectedModelKey(key);
+  }, []);
 
   const fetchModels = useCallback(async () => {
     setLoadingModels(true);
@@ -83,22 +91,31 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
         (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel)
     );
 
-    if (configuredMatch) {
-      // Use the configured model if available
-      setSelectedModelKey(`${configuredMatch.provider}:${configuredMatch.name}`);
-    } else if (allModels.length > 0) {
-      // Fall back to first available model
-      setSelectedModelKey(`${allModels[0].provider}:${allModels[0].name}`);
+    // Only set default model if user hasn't manually selected one
+    if (!userSelectedRef.current) {
+      if (configuredMatch) {
+        // Use the configured model if available
+        setSelectedModelKey(`${configuredMatch.provider}:${configuredMatch.name}`);
+      } else if (allModels.length > 0) {
+        // Fall back to first available model
+        setSelectedModelKey(`${allModels[0].provider}:${allModels[0].name}`);
+      }
     }
 
     setLoadingModels(false);
   }, [transcriptModelConfig]);
 
+  // Reset user selection tracking (call when dialog opens fresh)
+  const resetSelection = useCallback(() => {
+    userSelectedRef.current = false;
+  }, []);
+
   return {
     availableModels,
     selectedModelKey,
-    setSelectedModelKey,
+    setSelectedModelKey: setSelectedModelKeyWithTracking,
     loadingModels,
     fetchModels,
+    resetSelection,
   };
 }
